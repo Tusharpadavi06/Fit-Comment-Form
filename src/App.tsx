@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './com
 import { LogIn, LogOut, User as UserIcon, FileText, Users } from 'lucide-react';
 import { FormTab } from './components/FormTab';
 import { ManageModelsTab } from './components/ManageModelsTab';
+import { HistoryTab } from './components/HistoryTab';
 import { ModelResponseView } from './components/ModelResponseView';
 import { Toaster } from './components/ui/sonner';
 import { supabase } from './lib/supabase';
@@ -18,6 +19,23 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('form');
   const [modelPool, setModelPool] = useState<any[]>([]);
   const [loadingModels, setLoadingModels] = useState(true);
+  const [urlVersion, setUrlVersion] = useState(0);
+
+  // Function to handle navigating to edit a submission
+  const handleEditSubmission = (submissionId: string, round: string) => {
+    // Update URL without full reload
+    const url = new URL(window.location.href);
+    url.searchParams.set('mode', 'edit');
+    url.searchParams.set('submissionId', submissionId);
+    url.searchParams.set('round', round);
+    window.history.pushState({}, '', url);
+    
+    // Increment version to force remount of FormTab
+    setUrlVersion(v => v + 1);
+    
+    // Switch to form tab
+    setActiveTab('form');
+  };
 
   // Fetch model pool once at app level with local cache
   const fetchModelPool = async () => {
@@ -31,7 +49,7 @@ export default function App() {
 
       const { data, error } = await supabase
         .from('models')
-        .select('*')
+        .select('id, name, email')
         .order('name');
       
       if (error) throw error;
@@ -51,14 +69,15 @@ export default function App() {
     fetchModelPool();
   }, []);
 
-  // Check for response link in URL
+  // Check for parameters in URL
   const query = new URLSearchParams(window.location.search);
   const submissionId = query.get('submissionId');
   const assignmentId = query.get('assignmentId');
   const round = query.get('round');
+  const mode = query.get('mode');
 
-  // If viewing a response link
-  if (submissionId && assignmentId) {
+  // If viewing a model response link (submissionId + assignmentId, but NOT in edit mode)
+  if (submissionId && assignmentId && mode !== 'edit') {
     return (
       <div className="min-h-screen bg-slate-50 p-4 md:p-8">
         <Toaster />
@@ -103,6 +122,12 @@ export default function App() {
                   Form
                 </TabsTrigger>
                 <TabsTrigger 
+                  value="history" 
+                  className="px-10 py-2.5 rounded-md data-[state=active]:bg-primary data-[state=active]:text-white data-[state=active]:shadow-md transition-all font-medium"
+                >
+                  History
+                </TabsTrigger>
+                <TabsTrigger 
                   value="models" 
                   className="px-10 py-2.5 rounded-md data-[state=active]:bg-primary data-[state=active]:text-white data-[state=active]:shadow-md transition-all font-medium"
                 >
@@ -113,11 +138,17 @@ export default function App() {
 
             <div className="p-6 bg-[#f0ebf8]">
               <TabsContent value="form" className="outline-none mt-0">
+                {/* Use a key based on URL params and version to force re-mounting when we click from history */}
                 <FormTab 
+                  key={`${window.location.search}-${urlVersion}`}
                   modelPool={modelPool} 
                   loadingModels={loadingModels} 
                   refreshModels={fetchModelPool} 
                 />
+              </TabsContent>
+
+              <TabsContent value="history" className="outline-none mt-0">
+                <HistoryTab onEdit={handleEditSubmission} />
               </TabsContent>
 
               <TabsContent value="models" className="outline-none mt-0">

@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase, supabaseUrl, supabaseAnonKey } from '../lib/supabase';
+import { db, safeFirestoreWrite } from '../lib/firebase';
+import { doc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -9,6 +11,7 @@ import { Badge } from './ui/badge';
 import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare } from 'lucide-react';
 import { toast } from 'sonner';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
+import { getSeriesFromStyleNumber } from '../lib/series-utils';
 
 interface ModelResponseViewProps {
   submissionId: string;
@@ -22,92 +25,409 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [completed, setCompleted] = useState(false);
+  const [mailing, setMailing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Form states
   const [receivedDate, setReceivedDate] = useState(new Date().toLocaleDateString('en-GB'));
   const [commentsReceivedDate, setCommentsReceivedDate] = useState(new Date().toLocaleDateString('en-GB'));
+  const [givenForFitDate, setGivenForFitDate] = useState(new Date().toLocaleDateString('en-GB'));
   const [beforeWash, setBeforeWash] = useState('');
   const [afterWash, setAfterWash] = useState('');
   const [fabricTrims, setFabricTrims] = useState('');
+  const [color, setColor] = useState('');
 
   useEffect(() => {
     const fetchData = async () => {
+      if (!submissionId || !assignmentId) {
+        setLoading(false);
+        return;
+      }
+      
       try {
-        const { data: subData } = await supabase
-          .from('submissions')
-          .select('*')
-          .eq('id', submissionId)
-          .single();
-
-        const { data: assData } = await supabase
-          .from('assignments')
-          .select('*')
-          .eq('id', assignmentId)
-          .single();
+        const sId = (submissionId || "").trim();
+        const aId = (assignmentId || "").trim();
+        console.log("Fetching matching data for Style:", sId, "Assignment:", aId, "Round:", round);
         
-        if (subData && assData) {
-          setSubmissionData(subData);
-          setAssignmentData(assData);
+        if (!sId || !aId) {
+          setError("Malformed link. Submission or Assignment ID missing.");
+          setLoading(false);
+          return;
         }
+
+        let subData: any = null;
+        let assData: any = null;
+
+      // 1. Try Firestore FIRST (Primary source in this env)
+      try {
+        console.log("Attempting Firestore fetch for:", sId, aId);
+        const subRef = doc(db, 'submissions', sId);
+        const assRef = doc(db, 'assignments', aId);
+        
+        const [subDoc, assDoc] = await Promise.all([
+          getDoc(subRef),
+          getDoc(assRef)
+        ]);
+        
+        if (subDoc.exists()) {
+          const d = subDoc.data();
+          subData = { id: subDoc.id, ...d };
+          console.log("Firestore submission found");
+        }
+        
+        if (assDoc.exists()) {
+          const d = assDoc.data();
+          assData = { id: assDoc.id, ...d };
+          console.log("Firestore assignment found");
+        }
+      } catch (fe: any) {
+        console.warn("Firestore fetch issue:", fe.message);
+      }
+
+      // 2. Try Supabase ONLY if Firestore missed something
+      if (!subData || !assData) {
+        try {
+          console.log("Falling back to Supabase check for Link ID:", aId);
+          if (!subData) {
+            const { data: sList, error: sErr } = await supabase
+              .from('submissions')
+              .select('*')
+              .eq('id', sId)
+              .limit(1);
+            
+            if (sList && sList.length > 0) {
+              subData = sList[0];
+              console.log("Supabase submission found");
+            }
+          }
+
+          if (!assData && aId) {
+            const { data: aList, error: aErr } = await supabase
+              .from('assignments')
+              .select('*')
+              .eq('id', aId)
+              .limit(1);
+
+            if (aList && aList.length > 0) {
+              assData = aList[0];
+              console.log("Supabase assignment found");
+            }
+          }
+        } catch (se: any) {
+          console.log("Supabase fetch exception (soft-failing):", se.message);
+        }
+      }
+        
+        if (subData) setSubmissionData(subData);
+        if (assData) setAssignmentData(assData);
+
+        if (!subData && !assData) {
+           setError("Data not found. Link may be invalid or not yet updated across databases.");
+        }
+
       } catch (error) {
-        console.error("Fetch error:", error);
+        console.error("Critical fetch error:", error);
       } finally {
         setLoading(false);
       }
     };
     fetchData();
-  }, [submissionId, assignmentId]);
+  }, [submissionId, assignmentId, round]);
+
+  // Refactored Prefill Logic (Triggers when assignmentData is loaded)
+  useEffect(() => {
+    if (!assignmentData) return;
+
+    console.log("Analyzing assignment data for pre-fills:", assignmentData.id);
+    
+    // 1. Color handled separately per round if round > 1
+    if (assignmentData.color && !color) {
+      setColor(assignmentData.color);
+    }
+    
+    // Support per-round color pre-fill if available
+    const currentRoundKeys = [`round${round}`, `round_${round}`];
+    for (const key of currentRoundKeys) {
+      if (assignmentData[key]?.color && !color) {
+        setColor(assignmentData[key].color);
+      }
+    }
+    
+    // 2. Given for Fit Date
+    if (assignmentData.given_for_fit_date) {
+      setGivenForFitDate(assignmentData.given_for_fit_date);
+    } else {
+      for (const key of currentRoundKeys) {
+        if (assignmentData[key]?.given_for_fit_date) {
+          setGivenForFitDate(assignmentData[key].given_for_fit_date);
+        }
+      }
+    }
+    
+    // Fallback to Round 1 given date if still empty
+    if (!givenForFitDate && (assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date)) {
+      setGivenForFitDate(assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date);
+    }
+
+    // 3. Round-specific prefills (Round 2 or 3)
+    const roundNumVal = parseInt(round) || 1;
+    if (roundNumVal > 1) {
+      const prevRoundNum = roundNumVal - 1;
+      const dataValue = assignmentData[`round${prevRoundNum}`] || assignmentData[`round_${prevRoundNum}`];
+      
+      if (dataValue) {
+        console.log(`Pre-filling from Round ${prevRoundNum} data`, dataValue);
+        if (dataValue.before_wash || dataValue.beforeWash) setBeforeWash(dataValue.before_wash || dataValue.beforeWash);
+        if (dataValue.after_wash || dataValue.afterWash) setAfterWash(dataValue.after_wash || dataValue.afterWash);
+        if (dataValue.fabric_trims || dataValue.fabricTrims || dataValue.fabricComments) {
+          setFabricTrims(dataValue.fabric_trims || dataValue.fabricTrims || dataValue.fabricComments);
+        }
+        if (dataValue.given_for_fit_date || dataValue.givenForFitDate) {
+          setGivenForFitDate(dataValue.given_for_fit_date || dataValue.givenForFitDate);
+        }
+        if (dataValue.received_date || dataValue.receivedDate) {
+          setReceivedDate(dataValue.received_date || dataValue.receivedDate);
+        }
+      }
+    }
+  }, [assignmentData, round]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
+    
     setSubmitting(true);
+    const sId = (submissionId || '').trim();
+    const aId = (assignmentId || '').trim();
+
+    console.log("Submitting response for round:", round, "sId:", sId, "aId:", aId);
 
     try {
-      const responseData = {
-        type: 'RESPONSE_SUBMISSION',
-        submissionId,
-        assignmentId,
-        modelName: assignmentData.model_name,
-        modelEmail: assignmentData.model_email,
-        styleNo: submissionData.style_number,
-        sampleType: submissionData.type_of_sample,
-        round: String(round),
-        receivedDate,
-        commentsReceivedDate,
-        beforeWash,
-        afterWash,
-        fabricTrims,
-        tabName: submissionData.series || "General"
-      };
+      if (!assignmentData || !submissionData) {
+        throw new Error("Form data not loaded properly. Please refresh and try again.");
+      }
 
-      // 1. Update Google Sheets
-      const sheetResult = await saveToGoogleSheets(responseData);
-      
-      // 2. Update Supabase
-      const roundKey = `round${round}`;
-      const { error: dbError } = await supabase
-        .from('assignments')
-        .update({ 
-          [roundKey]: {
-            receivedDate,
-            commentsReceivedDate,
-            beforeWash,
-            afterWash,
-            fabricTrims,
-            submittedAt: new Date().toISOString()
-          },
-          status: 'completed'
-        })
-        .eq('id', assignmentId);
-
-      if (dbError) throw dbError;
-
+      // Show success state early
       setCompleted(true);
-      toast.success('Response submitted successfully');
+      toast.success('Submission Successful!');
+
+      // Firebase Save
+      safeFirestoreWrite(async () => {
+        const fbRoundKey = `round_${round}`;
+        await updateDoc(doc(db, 'assignments', aId), {
+          [fbRoundKey]: {
+            given_for_fit_date: givenForFitDate,
+            received_date: receivedDate,
+            comments_received_date: commentsReceivedDate,
+            before_wash: beforeWash,
+            after_wash: afterWash,
+            fabric_trims: fabricTrims,
+            color: color || assignmentData.color || assignmentData.modelColor,
+            submitted_at: serverTimestamp()
+          },
+          last_updated: serverTimestamp()
+        });
+      });
+
+      // 1b. Supabase Update (Sync round data to Supabase)
+      try {
+        if (assignmentId) {
+          const supabaseRoundKey = `round${round}`; // round1, round2, round3
+          const roundData = {
+            fit_date: receivedDate,
+            given_for_fit_date: givenForFitDate,
+            comments_received_date: commentsReceivedDate,
+            before_wash: beforeWash,
+            after_wash: afterWash,
+            fabric_trims: fabricTrims,
+            color: color || assignmentData.color || assignmentData.modelColor,
+            submitted_at: new Date().toISOString()
+          };
+          
+          console.log(`Updating Supabase Assignment ${assignmentId} for Round ${round}...`);
+          
+          const { error: updErr } = await supabase
+            .from('assignments')
+            .update({ [supabaseRoundKey]: roundData })
+            .eq('id', assignmentId);
+          
+          if (updErr) {
+            console.error("Supabase Assignment Update Error:", updErr);
+            // Don't toast error to model unless it's critical, but log it
+          } else {
+            console.log("Supabase Assignment Update successful");
+          }
+        }
+      } catch (suErr) {
+        console.warn("Supabase round update exception:", suErr);
+      }
+
+      // 2. Google Sheets Save
+      const userEmail = assignmentData.model_email || assignmentData.modelEmail || 'model@example.com'; 
+      const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID;
+      
+      // Determine the base URL for links
+      let appBaseUrl = window.location.origin;
+      const envAppUrl = import.meta.env.VITE_APP_URL;
+      
+      // Log for debugging
+      if (envAppUrl) {
+        console.log("ModelView: VITE_APP_URL is defined:", envAppUrl);
+        if (envAppUrl !== 'undefined' && envAppUrl.length > 5) {
+          appBaseUrl = envAppUrl;
+        }
+      }
+      
+      if (appBaseUrl.endsWith('/')) {
+        appBaseUrl = appBaseUrl.slice(0, -1);
+      }
+      
+      const modelFeedbackBaseUrl = appBaseUrl;
+      console.log("ModelView: Using base URL for feedback links:", modelFeedbackBaseUrl);
+      
+      // Links for the Google Sheet
+      const resR1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${assignmentId}&round=1`;
+      const resR2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${assignmentId}&round=2`;
+      const resR3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${assignmentId}&round=3`;
+      
+      const adminEditR1Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${assignmentId}&round=1`;
+      const adminEditR2Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${assignmentId}&round=2`;
+      const adminEditR3Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${assignmentId}&round=3`;
+
+      const series = getSeriesFromStyleNumber(submissionData.style_number || submissionData.styleNo || "");
+
+      const sheetPayload = {
+        assignmentId: assignmentId,
+        submissionId: submissionId,
+        sheetId: sheetId,
+        tabName: series || "General",
+        senderEmail: userEmail,
+        timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+        round: String(round),
+        color: color || assignmentData.color || "",
+        givenForFitDate: givenForFitDate,
+        receivedDate: receivedDate,
+        received_date: receivedDate,
+        commentsDate: commentsReceivedDate,
+        commentsReceivedDate: commentsReceivedDate,
+        comments_received_date: commentsReceivedDate,
+        beforeWash: beforeWash,
+        before_wash: beforeWash,
+        afterWash: afterWash,
+        after_wash: afterWash,
+        fabricComments: fabricTrims,
+        fabricTrims: fabricTrims,
+        fabric_trims: fabricTrims,
+        // Removed explicit link from N, V, AD as per user request
+        
+        // Round 1 (G-M)
+        "G": round === "1" ? (color || assignmentData.color || "") : (assignmentData.round1?.color || assignmentData.round_1?.color || ""),
+        "H": round === "1" ? (givenForFitDate || "") : (assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date || ""),
+        "I": round === "1" ? (commentsReceivedDate || "") : (assignmentData.round1?.comments_received_date || assignmentData.round_1?.comments_received_date || ""),
+        "J": round === "1" ? (receivedDate || "") : (assignmentData.round1?.received_date || assignmentData.round_1?.received_date || ""),
+        "K": round === "1" ? (beforeWash || "") : (assignmentData.round1?.before_wash || assignmentData.round_1?.before_wash || ""),
+        "L": round === "1" ? (afterWash || "") : (assignmentData.round1?.after_wash || assignmentData.round_1?.after_wash || ""),
+        "M": round === "1" ? (fabricTrims || "") : (assignmentData.round1?.fabric_trims || assignmentData.round_1?.fabric_trims || ""),
+        
+        // Round 2 (O-U)
+        "O": round === "2" ? (color || assignmentData.color || "") : (assignmentData.round2?.color || assignmentData.round_2?.color || ""),
+        "P": round === "2" ? (givenForFitDate || "") : (assignmentData.round2?.given_for_fit_date || assignmentData.round_2?.given_for_fit_date || ""),
+        "Q": round === "2" ? (commentsReceivedDate || "") : (assignmentData.round2?.comments_received_date || assignmentData.round_2?.comments_received_date || ""),
+        "R": round === "2" ? (receivedDate || "") : (assignmentData.round2?.received_date || assignmentData.round_2?.received_date || ""),
+        "S": round === "2" ? (beforeWash || "") : (assignmentData.round2?.before_wash || assignmentData.round_2?.before_wash || ""),
+        "T": round === "2" ? (afterWash || "") : (assignmentData.round2?.after_wash || assignmentData.round_2?.after_wash || ""),
+        "U": round === "2" ? (fabricTrims || "") : (assignmentData.round2?.fabric_trims || assignmentData.round_2?.fabric_trims || ""),
+
+        // Round 3 (W-AC)
+        "W": round === "3" ? (color || assignmentData.color || "") : (assignmentData.round3?.color || assignmentData.round_3?.color || ""),
+        "X": round === "3" ? (givenForFitDate || "") : (assignmentData.round3?.given_for_fit_date || assignmentData.round_3?.given_for_fit_date || ""),
+        "Y": round === "3" ? (commentsReceivedDate || "") : (assignmentData.round3?.comments_received_date || assignmentData.round_3?.comments_received_date || ""),
+        "Z": round === "3" ? (receivedDate || "") : (assignmentData.round3?.received_date || assignmentData.round_3?.received_date || ""),
+        "AA": round === "3" ? (beforeWash || "") : (assignmentData.round3?.before_wash || assignmentData.round_3?.before_wash || ""),
+        "AB": round === "3" ? (afterWash || "") : (assignmentData.round3?.after_wash || assignmentData.round_3?.after_wash || ""),
+        "AC": round === "3" ? (fabricTrims || "") : (assignmentData.round3?.fabric_trims || assignmentData.round_3?.fabric_trims || ""),
+        
+        "Style No": submissionData.style_number || submissionData.styleNo || "",
+        "Style Number": submissionData.style_number || submissionData.styleNo || "",
+        "Style N": submissionData.style_number || submissionData.styleNo || "",
+        "Type of Sample": submissionData.type_of_sample || submissionData.sampleType || "",
+        "Sample Type": submissionData.type_of_sample || submissionData.sampleType || "",
+        "Model Name": assignmentData.model_name || assignmentData.modelName || "",
+        "Model Email": assignmentData.model_email || assignmentData.modelEmail || "",
+        "Size": assignmentData.size || "",
+        "Color": color || assignmentData.color || "",
+        "Round": String(round),
+        "Date Sent": submissionData.created_at ? new Date(submissionData.created_at).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB'),
+        "Instructions": submissionData.description || "",
+        "Round 2 Edit Link": adminEditR2Link,
+        "Round 3 Edit Link": adminEditR3Link
+      };
+      
+      saveToGoogleSheets(sheetPayload).catch(err => {
+        console.error("Delayed Google Sheets error:", err);
+      });
+
+      // Automate email for next round if responding to Round 1 or Round 2
+      if (parseInt(round) < 3) {
+        console.log("Automatically sending next round link via email...");
+        handleSendNextRoundLink();
+      }
+
     } catch (error: any) {
+      console.error("Submission error:", error);
       toast.error(error.message || 'Failed to submit response');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleSendNextRoundLink = async () => {
+    if (mailing) return;
+    setMailing(true);
+    
+    try {
+      const nextRound = parseInt(round) + 1;
+      
+      // Determine base URL
+      let appBaseUrl = window.location.origin;
+      const envAppUrl = import.meta.env.VITE_APP_URL;
+      
+      // Use env URL if set
+      if (envAppUrl && envAppUrl !== 'undefined' && envAppUrl.length > 5) {
+        appBaseUrl = envAppUrl;
+      }
+
+      if (appBaseUrl.endsWith('/')) {
+        appBaseUrl = appBaseUrl.slice(0, -1);
+      }
+      
+      const modelFeedbackBaseUrl = appBaseUrl;
+      console.log("ModelView: Mail generation base URL:", modelFeedbackBaseUrl);
+      const nextRoundLink = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${assignmentId}&round=${nextRound}`;
+      
+      const mailPayload = {
+        type: 'SEND_MAIL',
+        modelEmail: assignmentData.model_email || assignmentData.modelEmail,
+        modelName: assignmentData.model_name || assignmentData.modelName,
+        styleNo: submissionData.style_number || submissionData.styleNo,
+        round: String(round),
+        date: receivedDate,
+        beforeWash: beforeWash,
+        afterWash: afterWash,
+        link: nextRound < 4 ? nextRoundLink : null,
+        tabName: submissionData.series || "General"
+      };
+
+      toast.promise(saveToGoogleSheets(mailPayload), {
+        loading: 'Sending link to your email...',
+        success: 'Email sent successfully!',
+        error: 'Failed to send email. You can still use the link columns in the sheet.'
+      });
+      
+    } catch (error) {
+      console.error("Mail error:", error);
+    } finally {
+      setMailing(false);
     }
   };
 
@@ -137,6 +457,19 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
     );
   }
 
+  if (error) {
+    return (
+      <div className="max-w-lg mx-auto p-8 text-center bg-white rounded-xl shadow-sm border mt-10 space-y-4">
+        <div className="h-16 w-16 bg-destructive/10 rounded-full flex items-center justify-center mx-auto">
+          <Info className="h-8 w-8 text-destructive" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900">Oops!</h2>
+        <p className="text-slate-500">{error}</p>
+        <Button variant="outline" onClick={() => window.location.reload()}>Retry</Button>
+      </div>
+    );
+  }
+
   if (!submissionData || !assignmentData) {
     return (
       <div className="max-w-lg mx-auto p-8 text-center bg-white rounded-xl shadow-sm border mt-10">
@@ -147,15 +480,47 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
 
   if (completed) {
     return (
-      <div className="max-w-lg mx-auto p-12 text-center bg-white rounded-xl shadow-lg border mt-10 space-y-6">
+      <div className="max-w-lg mx-auto p-12 text-center bg-white rounded-xl shadow-lg border mt-10 space-y-6 animate-in zoom-in-95 duration-300">
         <div className="h-20 w-20 bg-green-100 rounded-full flex items-center justify-center mx-auto">
           <CheckCircle2 className="h-10 w-10 text-green-600" />
         </div>
         <div className="space-y-2">
           <h2 className="text-2xl font-bold text-slate-900">Submission Successful!</h2>
-          <p className="text-slate-500">Your feedback for Round {round} has been recorded and synced to the tracking sheet.</p>
+          <p className="text-slate-500 font-medium">Thank you! Your feedback for Round {round} has been saved.</p>
+          <p className="text-sm text-slate-400">The tracking sheet has been updated automatically.</p>
         </div>
-        <Button variant="outline" onClick={() => window.close()} className="w-full">Close Window</Button>
+        <div className="pt-4 border-t border-slate-100 italic text-xs text-slate-400">
+          You can safely close this tab now.
+        </div>
+        
+        {parseInt(round) < 3 && (
+          <Button 
+            onClick={handleSendNextRoundLink}
+            disabled={mailing}
+            className="w-full h-12 bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-100"
+          >
+            {mailing ? (
+              <Loader2 className="w-5 h-5 animate-spin mr-2" />
+            ) : (
+              <MessageSquare className="w-5 h-5 mr-2" />
+            )}
+            Email me Round {parseInt(round) + 1} Link
+          </Button>
+        )}
+
+        <Button variant="outline" onClick={() => {
+          try {
+            window.close();
+            // Show alert if window.close() is blocked
+            setTimeout(() => {
+              alert("You can now close this tab manually.");
+            }, 500);
+          } catch (e) {
+            alert("Please close this browser tab.");
+          }
+        }} className="w-full h-12">
+          Close Tab
+        </Button>
       </div>
     );
   }
@@ -221,6 +586,34 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           </CardHeader>
           <CardContent className="pt-6 space-y-6">
             <div className="grid md:grid-cols-2 gap-6">
+              <div className="space-y-2 md:col-span-2">
+                <Label className="flex items-center gap-2 text-slate-700 font-bold">
+                  <CalendarIcon className="w-4 h-4 text-primary" />
+                  Sample Given for Fit Date *
+                </Label>
+                <Input 
+                  value={givenForFitDate}
+                  onChange={(e) => setGivenForFitDate(e.target.value)}
+                  placeholder="DD/MM/YYYY"
+                  className="border-primary/20 focus:border-primary"
+                  required
+                />
+              </div>
+              {parseInt(round) > 1 && (
+                <div className="space-y-2 md:col-span-2">
+                  <Label className="flex items-center gap-2 text-slate-700 font-bold">
+                    <Info className="w-4 h-4 text-primary" />
+                    Updated Color for Round {round} *
+                  </Label>
+                  <Input 
+                    value={color}
+                    onChange={(e) => setColor(e.target.value)}
+                    placeholder="Enter new color name..."
+                    className="border-primary/20 focus:border-primary"
+                    required
+                  />
+                </div>
+              )}
               <div className="space-y-2">
                 <Label className="flex items-center gap-2 text-slate-700">
                   <CalendarIcon className="w-4 h-4 text-primary" />

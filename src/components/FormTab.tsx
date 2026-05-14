@@ -65,7 +65,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
     return () => unsubscribe();
   }, []);
 
-  // Update all assignments when shared details change
+  // Update all assignments when shared details change (only as a starting point or bulk update)
   useEffect(() => {
     if (assignments.length > 0) {
       setAssignments(prev => prev.map(a => ({
@@ -75,6 +75,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         givenForFitDate: sharedFitDate || a.givenForFitDate
       })));
     }
+    // We keep this to allow bulk setting, but the table allows overrides
   }, [sharedColor, sharedSize, sharedFitDate]);
 
   const handleLogin = async () => {
@@ -82,9 +83,13 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
     try {
       await signInWithPopup(auth, provider);
       toast.success("Signed in successfully");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Login failed:", error);
-      toast.error("Cloud not sign in with Google");
+      if (error.code === 'auth/unauthorized-domain') {
+        toast.error("Domain unauthorized. Please add this domain to your Firebase Console -> Authentication -> Authorized Domains.");
+      } else {
+        toast.error("Cloud not sign in with Google: " + (error.message || "Unknown error"));
+      }
     }
   };
 
@@ -948,43 +953,42 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                           </div>
                         </TableCell>
                         <TableCell className="py-4">
-                          {editMode ? (
+                          <Input 
+                            value={row.givenForFitDate} 
+                            onChange={e => {
+                              const newAss = assignments.map(a => a.id === row.id ? { ...a, givenForFitDate: e.target.value } : a);
+                              setAssignments(newAss);
+                            }}
+                            className="border-0 border-b border-slate-100 rounded-none px-0 focus-visible:ring-0 shadow-none focus-visible:border-indigo-500 h-8 bg-transparent text-sm w-32"
+                          />
+                        </TableCell>
+                        <TableCell className="py-4">
+                          <div className="space-y-1">
                             <Input 
-                              value={row.givenForFitDate} 
+                              value={row.color} 
                               onChange={e => {
-                                const newAss = assignments.map(a => a.id === row.id ? { ...a, givenForFitDate: e.target.value } : a);
+                                const newAss = assignments.map(a => a.id === row.id ? { ...a, color: e.target.value } : a);
                                 setAssignments(newAss);
                               }}
-                              className="border-0 border-b border-slate-100 rounded-none px-0 focus-visible:ring-0 shadow-none focus-visible:border-indigo-500 h-8 bg-transparent text-sm w-32"
+                              className="border-0 border-b border-indigo-200 rounded-none px-0 focus-visible:ring-0 shadow-none focus-visible:border-indigo-500 h-8 bg-transparent text-sm font-bold text-slate-900 w-32"
                             />
-                          ) : (
-                            <span className="text-sm font-medium text-slate-600">{row.givenForFitDate || '-'}</span>
-                          )}
+                            {editMode && currentRound !== '1' && row.round1Data?.color && (
+                              <p className="text-[9px] text-slate-400 italic">R1: {row.round1Data.color}</p>
+                            )}
+                            {editMode && currentRound === '3' && row.round2Data?.color && (
+                              <p className="text-[9px] text-slate-400 italic">R2: {row.round2Data.color}</p>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="py-4">
-                          {editMode ? (
-                            <div className="space-y-1">
-                              <Input 
-                                value={row.color} 
-                                onChange={e => {
-                                  const newAss = assignments.map(a => a.id === row.id ? { ...a, color: e.target.value } : a);
-                                  setAssignments(newAss);
-                                }}
-                                className="border-0 border-b border-indigo-200 rounded-none px-0 focus-visible:ring-0 shadow-none focus-visible:border-indigo-500 h-8 bg-transparent text-sm font-bold text-slate-900 w-32"
-                              />
-                              {currentRound !== '1' && row.round1Data?.color && (
-                                <p className="text-[9px] text-slate-400 italic">R1: {row.round1Data.color}</p>
-                              )}
-                              {currentRound === '3' && row.round2Data?.color && (
-                                <p className="text-[9px] text-slate-400 italic">R2: {row.round2Data.color}</p>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-sm font-medium text-slate-600">{row.color || '-'}</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="py-4">
-                          <span className="text-sm font-medium text-slate-600">{row.size || '-'}</span>
+                          <Input 
+                            value={row.size} 
+                            onChange={e => {
+                              const newAss = assignments.map(a => a.id === row.id ? { ...a, size: e.target.value } : a);
+                              setAssignments(newAss);
+                            }}
+                            className="border-0 border-b border-indigo-200 rounded-none px-0 focus-visible:ring-0 shadow-none focus-visible:border-indigo-500 h-8 bg-transparent text-sm font-bold text-slate-900 w-24"
+                          />
                         </TableCell>
                         {!editMode && (
                           <TableCell className="py-4 pr-4 text-right">

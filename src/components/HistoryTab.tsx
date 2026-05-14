@@ -27,6 +27,8 @@ interface Submission {
     round1?: any;
     round2?: any;
     round3?: any;
+    round4?: any;
+    round5?: any;
   }[];
 }
 
@@ -63,7 +65,7 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
         .from('submissions')
         .select(`
           *,
-          assignments(id, model_name, model_email, color, size, round1, round2, round3)
+          assignments(id, model_name, model_email, color, size, round1, round2, round3, round4, round5)
         `)
         .order('created_at', { ascending: false });
 
@@ -103,7 +105,9 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
               size: ad.size,
               round1: ad.round1,
               round2: ad.round2,
-              round3: ad.round3
+              round3: ad.round3,
+              round4: ad.round4,
+              round5: ad.round5
             });
           });
 
@@ -251,6 +255,22 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                                 Round 3
                               </Button>
                               <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="h-8 text-[11px] border-purple-200 text-purple-700 hover:bg-purple-50 hover:text-purple-800"
+                                onClick={() => onEdit(sub.id, '4')}
+                              >
+                                Round 4
+                              </Button>
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="h-8 text-[11px] border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+                                onClick={() => onEdit(sub.id, '5')}
+                              >
+                                Round 5
+                              </Button>
+                              <Button 
                                 variant="ghost" 
                                 size="icon" 
                                 className="h-8 w-8 text-slate-400"
@@ -285,7 +305,11 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                                           <TableHead className="text-[10px] font-bold h-8 text-center text-amber-700 bg-amber-50/50 border-r min-w-[90px]">R2 Date</TableHead>
                                           <TableHead className="text-[10px] font-bold h-8 text-center text-amber-700 bg-amber-50/50 border-r min-w-[80px]">R2 Color</TableHead>
                                           <TableHead className="text-[10px] font-bold h-8 text-center text-emerald-700 bg-emerald-50/50 border-r min-w-[90px]">R3 Date</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-emerald-700 bg-emerald-50/50 min-w-[80px]">R3 Color</TableHead>
+                                          <TableHead className="text-[10px] font-bold h-8 text-center text-emerald-700 bg-emerald-50/50 border-r min-w-[80px]">R3 Color</TableHead>
+                                          <TableHead className="text-[10px] font-bold h-8 text-center text-purple-700 bg-purple-50/50 border-r min-w-[90px]">R4 Date</TableHead>
+                                          <TableHead className="text-[10px] font-bold h-8 text-center text-purple-700 bg-purple-50/50 border-r min-w-[80px]">R4 Color</TableHead>
+                                          <TableHead className="text-[10px] font-bold h-8 text-center text-rose-700 bg-rose-50/50 border-r min-w-[90px]">R5 Date</TableHead>
+                                          <TableHead className="text-[10px] font-bold h-8 text-center text-rose-700 bg-rose-50/50 min-w-[80px]">R5 Color</TableHead>
                                         </TableRow>
                                       </TableHeader>
                                       <TableBody>
@@ -305,7 +329,15 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                                             
                                             {/* ROUND 3 */}
                                             <TableCell className="text-[10px] py-1.5 text-center font-mono bg-emerald-50/5 border-r whitespace-nowrap">{getRoundDate(a, '3')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-emerald-50/5 truncate max-w-[80px]" title={getRoundColor(a, '3')}>{getRoundColor(a, '3')}</TableCell>
+                                            <TableCell className="text-[10px] py-1.5 text-center bg-emerald-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '3')}>{getRoundColor(a, '3')}</TableCell>
+
+                                            {/* ROUND 4 */}
+                                            <TableCell className="text-[10px] py-1.5 text-center font-mono bg-purple-50/5 border-r whitespace-nowrap">{getRoundDate(a, '4')}</TableCell>
+                                            <TableCell className="text-[10px] py-1.5 text-center bg-purple-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '4')}>{getRoundColor(a, '4')}</TableCell>
+
+                                            {/* ROUND 5 */}
+                                            <TableCell className="text-[10px] py-1.5 text-center font-mono bg-rose-50/5 border-r whitespace-nowrap">{getRoundDate(a, '5')}</TableCell>
+                                            <TableCell className="text-[10px] py-1.5 text-center bg-rose-50/5 truncate max-w-[80px]" title={getRoundColor(a, '5')}>{getRoundColor(a, '5')}</TableCell>
                                           </TableRow>
                                         ))}
                                       </TableBody>

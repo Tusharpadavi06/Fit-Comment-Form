@@ -46,7 +46,13 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       
       try {
         const sId = (submissionId || "").trim();
-        const aId = (assignmentId || "").trim();
+        let aId = (assignmentId || "").trim();
+        
+        // Sanitize aId - strip 'new-' prefix if present from old links
+        if (aId.startsWith('new-')) {
+          aId = aId.substring(4);
+        }
+        
         console.log("Fetching matching data for Style:", sId, "Assignment:", aId, "Round:", round);
         
         if (!sId || !aId) {
@@ -59,10 +65,11 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         let assData: any = null;
 
       // 1. Try Firestore FIRST (Primary source in this env)
+      const firestoreAId = aId;
       try {
-        console.log("Attempting Firestore fetch for:", sId, aId);
+        console.log("Attempting Firestore fetch for:", sId, firestoreAId);
         const subRef = doc(db, 'submissions', sId);
-        const assRef = doc(db, 'assignments', aId);
+        const assRef = doc(db, 'assignments', firestoreAId);
         
         const [subDoc, assDoc] = await Promise.all([
           getDoc(subRef),
@@ -107,6 +114,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
               .select('*')
               .eq('id', aId)
               .limit(1);
+
+            if (aErr) console.error("Supabase assignment fetch error:", aErr);
 
             if (aList && aList.length > 0) {
               assData = aList[0];
@@ -187,6 +196,9 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         }
         if (dataValue.received_date || dataValue.receivedDate) {
           setReceivedDate(dataValue.received_date || dataValue.receivedDate);
+        }
+        if (dataValue.comments_received_date || dataValue.commentsReceivedDate) {
+          setCommentsReceivedDate(dataValue.comments_received_date || dataValue.commentsReceivedDate);
         }
       }
     }
@@ -286,13 +298,17 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       console.log("ModelView: Using base URL for feedback links:", modelFeedbackBaseUrl);
       
       // Links for the Google Sheet
-      const resR1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${assignmentId}&round=1`;
-      const resR2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${assignmentId}&round=2`;
-      const resR3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${assignmentId}&round=3`;
+      const resR1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=1`;
+      const resR2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=2`;
+      const resR3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=3`;
+      const resR4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=4`;
+      const resR5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=5`;
       
-      const adminEditR1Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${assignmentId}&round=1`;
-      const adminEditR2Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${assignmentId}&round=2`;
-      const adminEditR3Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${assignmentId}&round=3`;
+      const adminEditR1Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=1`;
+      const adminEditR2Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=2`;
+      const adminEditR3Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=3`;
+      const adminEditR4Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=4`;
+      const adminEditR5Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=5`;
 
       const series = getSeriesFromStyleNumber(submissionData.style_number || submissionData.styleNo || "");
 
@@ -346,6 +362,24 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         "AA": round === "3" ? (beforeWash || "") : (assignmentData.round3?.before_wash || assignmentData.round_3?.before_wash || ""),
         "AB": round === "3" ? (afterWash || "") : (assignmentData.round3?.after_wash || assignmentData.round_3?.after_wash || ""),
         "AC": round === "3" ? (fabricTrims || "") : (assignmentData.round3?.fabric_trims || assignmentData.round_3?.fabric_trims || ""),
+
+        // Round 4 (AE-AK)
+        "AE": round === "4" ? (color || assignmentData.color || "") : (assignmentData.round4?.color || (assignmentData.round_4?.color || "")),
+        "AF": round === "4" ? (givenForFitDate || "") : (assignmentData.round4?.given_for_fit_date || (assignmentData.round_4?.given_for_fit_date || "")),
+        "AG": round === "4" ? (commentsReceivedDate || "") : (assignmentData.round4?.comments_received_date || (assignmentData.round_4?.comments_received_date || "")),
+        "AH": round === "4" ? (receivedDate || "") : (assignmentData.round4?.received_date || (assignmentData.round_4?.received_date || "")),
+        "AI": round === "4" ? (beforeWash || "") : (assignmentData.round4?.before_wash || (assignmentData.round_4?.before_wash || "")),
+        "AJ": round === "4" ? (afterWash || "") : (assignmentData.round4?.after_wash || (assignmentData.round_4?.after_wash || "")),
+        "AK": round === "4" ? (fabricTrims || "") : (assignmentData.round4?.fabric_trims || (assignmentData.round_4?.fabric_trims || "")),
+
+        // Round 5 (AM-AS)
+        "AM": round === "5" ? (color || assignmentData.color || "") : (assignmentData.round5?.color || (assignmentData.round_5?.color || "")),
+        "AN": round === "5" ? (givenForFitDate || "") : (assignmentData.round5?.given_for_fit_date || (assignmentData.round_5?.given_for_fit_date || "")),
+        "AO": round === "5" ? (commentsReceivedDate || "") : (assignmentData.round5?.comments_received_date || (assignmentData.round_5?.comments_received_date || "")),
+        "AP": round === "5" ? (receivedDate || "") : (assignmentData.round5?.received_date || (assignmentData.round_5?.received_date || "")),
+        "AQ": round === "5" ? (beforeWash || "") : (assignmentData.round5?.before_wash || (assignmentData.round_5?.before_wash || "")),
+        "AR": round === "5" ? (afterWash || "") : (assignmentData.round5?.after_wash || (assignmentData.round_5?.after_wash || "")),
+        "AS": round === "5" ? (fabricTrims || "") : (assignmentData.round5?.fabric_trims || (assignmentData.round_5?.fabric_trims || "")),
         
         "Style No": submissionData.style_number || submissionData.styleNo || "",
         "Style Number": submissionData.style_number || submissionData.styleNo || "",
@@ -360,15 +394,17 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         "Date Sent": submissionData.created_at ? new Date(submissionData.created_at).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB'),
         "Instructions": submissionData.description || "",
         "Round 2 Edit Link": adminEditR2Link,
-        "Round 3 Edit Link": adminEditR3Link
+        "Round 3 Edit Link": adminEditR3Link,
+        "Round 4 Edit Link": adminEditR4Link,
+        "Round 5 Edit Link": adminEditR5Link
       };
       
       saveToGoogleSheets(sheetPayload).catch(err => {
         console.error("Delayed Google Sheets error:", err);
       });
 
-      // Automate email for next round if responding to Round 1 or Round 2
-      if (parseInt(round) < 3) {
+      // Automate email for next round if responding to Round 1, 2, 3, or 4
+      if (parseInt(round) < 5) {
         console.log("Automatically sending next round link via email...");
         handleSendNextRoundLink();
       }
@@ -414,7 +450,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         date: receivedDate,
         beforeWash: beforeWash,
         afterWash: afterWash,
-        link: nextRound < 4 ? nextRoundLink : null,
+        link: nextRound < 6 ? nextRoundLink : null,
         tabName: submissionData.series || "General"
       };
 
@@ -493,7 +529,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           You can safely close this tab now.
         </div>
         
-        {parseInt(round) < 3 && (
+        {parseInt(round) < 5 && (
           <Button 
             onClick={handleSendNextRoundLink}
             disabled={mailing}

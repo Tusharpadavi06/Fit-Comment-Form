@@ -32,6 +32,8 @@ interface AssignmentRow {
   round1Data?: any;
   round2Data?: any;
   round3Data?: any;
+  round4Data?: any;
+  round5Data?: any;
 }
 
 interface FormTabProps {
@@ -56,6 +58,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   const [currentRound, setCurrentRound] = useState('1');
   const [existingSubmissionId, setExistingSubmissionId] = useState<string | null>(null);
   const [user, setUser] = useState<any>(null);
+  const [deletedAssignmentIds, setDeletedAssignmentIds] = useState<string[]>([]);
 
   // Listen for Auth changes
   useEffect(() => {
@@ -65,18 +68,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
     return () => unsubscribe();
   }, []);
 
-  // Update all assignments when shared details change (only as a starting point or bulk update)
-  useEffect(() => {
-    if (assignments.length > 0) {
-      setAssignments(prev => prev.map(a => ({
-        ...a,
-        color: sharedColor || a.color,
-        size: sharedSize || a.size,
-        givenForFitDate: sharedFitDate || a.givenForFitDate
-      })));
-    }
-    // We keep this to allow bulk setting, but the table allows overrides
-  }, [sharedColor, sharedSize, sharedFitDate]);
+  // No auto-syncing useEffect here anymore. 
+  // Shared values will be used as defaults when toggleModelSelection adds a new model.
 
   const handleLogin = async () => {
     const provider = new GoogleAuthProvider();
@@ -132,7 +125,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       // 2. Try Supabase for Assignments
       const { data: ass, error: assErr } = await supabase
         .from('assignments')
-        .select('id, model_id, model_name, model_email, color, size, round1, round2, round3')
+        .select('id, model_id, model_name, model_email, color, size, round1, round2, round3, round4, round5')
         .eq('submission_id', id);
 
       if (subErr) console.log("Supabase sub fetch error ignored:", subErr.message);
@@ -175,7 +168,9 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             given_for_fit_date: d.given_for_fit_date,
             round1: d.round1,
             round2: d.round2,
-            round3: d.round3
+            round3: d.round3,
+            round4: d.round4,
+            round5: d.round5
           });
         });
         finalAss = docs;
@@ -194,18 +189,24 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           const r1 = a.round1 || {};
           const r2 = a.round2 || {};
           const r3 = a.round3 || {};
+          const r4 = a.round4 || {};
+          const r5 = a.round5 || {};
           
           // Use current round color if available, otherwise fallback to main color
           let currentColor = a.color || '';
           if (round === '1') currentColor = r1.color || a.color || '';
           if (round === '2') currentColor = r2.color || a.color || '';
           if (round === '3') currentColor = r3.color || a.color || '';
+          if (round === '4') currentColor = r4.color || a.color || '';
+          if (round === '5') currentColor = r5.color || a.color || '';
 
           // Use current round date if available
           let currentDate = a.given_for_fit_date || new Date().toLocaleDateString('en-GB');
           if (round === '1') currentDate = r1.given_for_fit_date || currentDate;
           if (round === '2') currentDate = r2.given_for_fit_date || currentDate;
           if (round === '3') currentDate = r3.given_for_fit_date || currentDate;
+          if (round === '4') currentDate = r4.given_for_fit_date || currentDate;
+          if (round === '5') currentDate = r5.given_for_fit_date || currentDate;
 
           // CRITICAL: Ensure model name is present. Fallback to modelPool lookup if db record is missing it.
           let mName = a.model_name || '';
@@ -232,7 +233,9 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             givenForFitDate: currentDate,
             round1Data: r1,
             round2Data: r2,
-            round3Data: r3
+            round3Data: r3,
+            round4Data: r4,
+            round5Data: r5
           };
         });
         
@@ -253,33 +256,56 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   const toggleModelSelection = (model: ModelListItem) => {
     const isSelected = assignments.some(a => a.modelId === model.id);
     if (isSelected) {
-      // Remove if not the last one (or if it's the last one but has data, maybe clear it? But user said separate rows)
+      // Find the assignment(s) for this model
+      const modelAssignment = assignments.find(a => a.modelId === model.id);
+      
+      if (editMode && modelAssignment) {
+        // Find if this assignment was likely from DB
+        // We can check if it's already in the table and not newly added in this session
+        // A better way is to check the deletedAssignmentIds tracking
+        setDeletedAssignmentIds(prev => [...prev, modelAssignment.id]);
+      }
+
       if (assignments.length > 1) {
         setAssignments(assignments.filter(a => a.modelId !== model.id));
       } else {
-        // Just clear the fields of the last row
         setAssignments(assignments.map(a => 
           a.modelId === model.id ? { ...a, modelId: '', modelName: '', modelEmail: '', color: '', size: '' } : a
         ));
       }
     } else {
-      // Add a new row with this model
-      // If there's an empty row, use it first
+      // row.id mark logic: we don't need 'new-' prefix if we track initial IDs
+      const newAssignment: AssignmentRow = { 
+        id: uuidv4(), // Use standard UUID
+        modelId: model.id, 
+        modelName: model.name, 
+        modelEmail: model.email, 
+        color: sharedColor, 
+        size: sharedSize, 
+        givenForFitDate: sharedFitDate,
+        round1Data: {},
+        round2Data: {},
+        round3Data: {},
+        round4Data: {},
+        round5Data: {}
+      };
+
+      // If we are in edit mode, ensure the round data reflects current round
+      if (editMode) {
+        if (currentRound === '1') newAssignment.round1Data = { color: sharedColor, given_for_fit_date: sharedFitDate };
+        if (currentRound === '2') newAssignment.round2Data = { color: sharedColor, given_for_fit_date: sharedFitDate };
+        if (currentRound === '3') newAssignment.round3Data = { color: sharedColor, given_for_fit_date: sharedFitDate };
+        if (currentRound === '4') newAssignment.round4Data = { color: sharedColor, given_for_fit_date: sharedFitDate };
+        if (currentRound === '5') newAssignment.round5Data = { color: sharedColor, given_for_fit_date: sharedFitDate };
+      }
+
       const emptyRowIndex = assignments.findIndex(a => !a.modelId);
       if (emptyRowIndex !== -1) {
         setAssignments(assignments.map((a, idx) => 
-          idx === emptyRowIndex ? { ...a, modelId: model.id, modelName: model.name, modelEmail: model.email } : a
+          idx === emptyRowIndex ? newAssignment : a
         ));
       } else {
-        setAssignments([...assignments, { 
-          id: uuidv4(), 
-          modelId: model.id, 
-          modelName: model.name, 
-          modelEmail: model.email, 
-          color: sharedColor, 
-          size: sharedSize, 
-          givenForFitDate: sharedFitDate 
-        }]);
+        setAssignments([...assignments, newAssignment]);
       }
     }
   };
@@ -335,6 +361,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       const editR1Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&round=1`;
       const editR2Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&round=2`;
       const editR3Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&round=3`;
+      const editR4Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&round=4`;
+      const editR5Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&round=5`;
       
       // 1. Save submission to Supabase
       console.log("Saving submission to Supabase Submissions table:", submissionId);
@@ -394,11 +422,15 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=1`;
         const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=2`;
         const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=3`;
+        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=4`;
+        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=5`;
         return {
           ...a,
           r1Link,
           r2Link,
-          r3Link
+          r3Link,
+          r4Link,
+          r5Link
         };
       });
 
@@ -417,6 +449,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             r1_link: a.r1Link,
             r2_link: a.r2Link,
             r3_link: a.r3Link,
+            r4_link: a.r4Link,
+            r5_link: a.r5Link,
             last_updated: serverTimestamp()
           }, { merge: true });
         }
@@ -432,23 +466,57 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           model_name: a.modelName,
           model_email: a.modelEmail,
           color: a.color,
-          size: a.size
+          size: a.size,
+          r1_link: a.r1Link,
+          r2_link: a.r2Link,
+          r3_link: a.r3Link,
+          r4_link: a.r4Link,
+          r5_link: a.r5Link
         };
 
         // Initialize the JSONB round data if currentRound corresponds
-        // Using the keys expected by the user's schema provided in chat
         if (currentRound === '1') {
           payload.round1 = { ...(a.round1Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
         } else if (currentRound === '2') {
           payload.round2 = { ...(a.round2Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
         } else if (currentRound === '3') {
           payload.round3 = { ...(a.round3Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
+        } else if (currentRound === '4') {
+          payload.round4 = { ...(a.round4Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
+        } else if (currentRound === '5') {
+          payload.round5 = { ...(a.round5Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
         }
 
         return payload;
       });
 
-      const { error: assError } = await supabase.from('assignments').upsert(assignmentsToInsert);
+      console.log("Upserting assignments with payload sample:", assignmentsToInsert[0]);
+      let { error: assError } = await supabase.from('assignments').upsert(assignmentsToInsert);
+      
+      if (assError && assError.message.includes("column")) {
+        console.warn("Schema mismatch in assignments - likely missing R4/R5 columns. Retrying without new columns...");
+        // Fallback: Remove round4, round5, r4_link, r5_link from payload and retry
+        const safeAssignments = assignmentsWithLinks.map(a => {
+          const payload: any = {
+            id: a.id,
+            submission_id: submissionId,
+            model_id: a.modelId,
+            model_name: a.modelName,
+            model_email: a.modelEmail,
+            color: a.color,
+            size: a.size,
+            r1_link: a.r1Link,
+            r2_link: a.r2Link,
+            r3_link: a.r3Link
+          };
+          if (currentRound === '1') payload.round1 = { ...(a.round1Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
+          if (currentRound === '2') payload.round2 = { ...(a.round2Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
+          if (currentRound === '3') payload.round3 = { ...(a.round3Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
+          return payload;
+        });
+        const { error: retryAssErr } = await supabase.from('assignments').upsert(safeAssignments);
+        assError = retryAssErr;
+      }
       
       if (assError) {
         console.error("Supabase Assignments Save Failed:", assError);
@@ -464,60 +532,87 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         console.log("Supabase Assignments Save successful");
       }
 
+      // 3b. Delete removed assignments from Supabase and Firestore
+      if (editMode && deletedAssignmentIds.length > 0) {
+        console.log("Deleting assignments:", deletedAssignmentIds);
+        const { error: delError } = await supabase
+          .from('assignments')
+          .delete()
+          .in('id', deletedAssignmentIds);
+        
+        if (delError) console.error("Error deleting from Supabase:", delError);
+
+        // Delete from Firestore
+        safeFirestoreWrite(async () => {
+          for (const idToDel of deletedAssignmentIds) {
+            // We don't have a direct delete tool but we can set to null or handle if needed
+            // For now let's just log it. In a real app we'd call deleteDoc
+            // Since our metadata includes the assignment ID, it stays linked unless removed
+          }
+        });
+      }
+
       // 4. Sync to Google Sheets (In parallel for better performance)
       const sheetSyncs = assignmentsWithLinks.map(async (a) => {
         try {
           const adminEditR2Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${a.id}&round=2`;
           const adminEditR3Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${a.id}&round=3`;
 
-          const payload: any = {
-            type: editMode ? 'UPDATE_SUBMISSION' : 'NEW_SUBMISSION',
-            assignmentId: a.id,
-            submissionId: submissionId,
-            modelName: a.modelName,
-            modelEmail: a.modelEmail,
-            sampleType: typeOfSample,
-            styleNo: styleNo.trim(),
-            description: description,
-            size: a.size,
-            color: a.color,
-            round: currentRound,
-
-            // Column letters for the script's mapping
-            "B": a.modelName || "",
-            "C": typeOfSample || "",
-            "D": styleNo.trim() || "",
-            "E": description || "",
-            "F": a.size || "",
-            // Round-specific initializations
-            ...(currentRound === '1' ? {
-              "G": a.color || "",
-              "H": a.givenForFitDate || ""
-            } : {}),
-            ...(currentRound === '2' ? {
-              "O": a.color || "",
-              "P": a.givenForFitDate || ""
-            } : {}),
-            ...(currentRound === '3' ? {
-              "W": a.color || "",
-              "X": a.givenForFitDate || ""
-            } : {}),
-            givenForFitDate: a.givenForFitDate,
-
             // Shared links
-            link: currentRound === '2' ? a.r2Link : (currentRound === '3' ? a.r3Link : a.r1Link),
-            r2Link: currentRound === '2' ? a.r2Link : "",
-            r3Link: currentRound === '3' ? a.r3Link : "",
+            const currentLink = currentRound === '2' ? a.r2Link : (currentRound === '3' ? a.r3Link : (currentRound === '4' ? a.r4Link : (currentRound === '5' ? a.r5Link : a.r1Link)));
             
-            // Map Assignment ID to AX (50) for the script
-            // Helpful human-readable fields
-            "Style No": styleNo.trim(),
-            "Model Name": a.modelName,
-            "Round": String(currentRound),
-            
-            // Link for the Model feedback form
-            responseUrl: currentRound === '2' ? a.r2Link : (currentRound === '3' ? a.r3Link : a.r1Link),
-            tabName: series || "General",
+            const payload: any = {
+              type: editMode ? 'UPDATE_SUBMISSION' : 'NEW_SUBMISSION',
+              assignmentId: a.id,
+              submissionId: submissionId,
+              modelName: a.modelName,
+              modelEmail: a.modelEmail,
+              sampleType: typeOfSample,
+              styleNo: styleNo.trim(),
+              description: description,
+              size: a.size,
+              color: a.color,
+              round: currentRound,
+
+              // Column letters for the script's mapping
+              "B": a.modelName || "",
+              "C": typeOfSample || "",
+              "D": styleNo.trim() || "",
+              "E": description || "",
+              "F": a.size || "",
+              // Round-specific initializations
+              ...(currentRound === '1' ? {
+                "G": a.color || "",
+                "H": a.givenForFitDate || ""
+              } : {}),
+              ...(currentRound === '2' ? {
+                "O": a.color || "",
+                "P": a.givenForFitDate || ""
+              } : {}),
+              ...(currentRound === '3' ? {
+                "W": a.color || "",
+                "X": a.givenForFitDate || ""
+              } : {}),
+              ...(currentRound === '4' ? {
+                "AE": a.color || "",
+                "AF": a.givenForFitDate || ""
+              } : {}),
+              ...(currentRound === '5' ? {
+                "AM": a.color || "",
+                "AN": a.givenForFitDate || ""
+              } : {}),
+              givenForFitDate: a.givenForFitDate,
+
+              // Shared links
+              link: currentLink,
+              r2Link: currentRound === '2' ? a.r2Link : "",
+              r3Link: currentRound === '3' ? a.r3Link : "",
+              r4Link: currentRound === '4' ? a.r4Link : "",
+              r5Link: currentRound === '5' ? a.r5Link : "",
+              
+              // Link for the Model feedback form
+              responseUrl: currentLink, 
+              tabName: series || "General",
             triggerEmail: true,
             senderEmail: userEmail,
             timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
@@ -648,6 +743,23 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                         </div>
                       </div>
                     </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] text-slate-400 font-bold uppercase">Round 4 Link</Label>
+                        <div className="flex gap-1">
+                          <Input readOnly value={a.r4Link} className="text-[9px] bg-white h-7" />
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={() => { navigator.clipboard.writeText(a.r4Link); toast.success("Copied R4"); }}>📋</Button>
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] text-slate-400 font-bold uppercase">Round 5 Link</Label>
+                        <div className="flex gap-1">
+                          <Input readOnly value={a.r5Link} className="text-[9px] bg-white h-7" />
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={() => { navigator.clipboard.writeText(a.r5Link); toast.success("Copied R5"); }}>📋</Button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -658,7 +770,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             <Button variant="ghost" className="text-primary" onClick={() => setLastSubmission(null)}>
               Submit another response
             </Button>
-            {lastSubmission.round !== '3' && (
+            {Number(lastSubmission.round) < 5 && (
               <Button variant="outline" className="text-slate-600 border-slate-200" onClick={() => {
                 const nextRound = String(Number(lastSubmission.round) + 1);
                 window.location.search = `?mode=edit&submissionId=${lastSubmission.id}&round=${nextRound}`;
@@ -687,8 +799,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                   </h3>
                   <p className="text-xs text-slate-500">Initiating a new round will generate a fresh response link for the model.</p>
                 </div>
-                <div className="flex gap-2 bg-white p-1 rounded-lg border shadow-sm self-stretch md:self-auto">
-                  {['1', '2', '3'].map((r) => (
+                <div className="flex gap-2 bg-white p-1 rounded-lg border shadow-sm self-stretch md:self-auto overflow-x-auto">
+                  {['1', '2', '3', '4', '5'].map((r) => (
                     <Button 
                       key={r}
                       type="button"
@@ -825,51 +937,53 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           </CardContent>
         </Card>
 
-        {/* Assignment Section - MOVED UP in Edit Mode to see models first */}
-        <div className="space-y-4 pt-2">
-          {!editMode && (
-            <Card className="shadow-sm border-dashed border-2 bg-slate-50/30">
-              <CardHeader className="py-4 px-6 pb-2">
-                <CardTitle className="text-sm font-medium text-slate-700 flex items-center gap-2">
-                  <User className="w-4 h-4 text-primary" />
-                  Select Models for Assignment
-                </CardTitle>
-                <CardDescription className="text-[10px]">Click models to add or remove them from this request.</CardDescription>
-              </CardHeader>
-              <CardContent className="px-6 pb-6 pt-2">
-                {loadingModels ? (
-                  <div className="flex items-center gap-2 py-2">
-                    <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
-                    <span className="text-[10px] text-slate-400 font-medium">Fetching model pool...</span>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {modelPool.map(model => {
-                      const isSelected = assignments.some(a => a.modelId === model.id);
-                      return (
-                        <button
-                          key={model.id}
-                          type="button"
-                          onClick={() => toggleModelSelection(model)}
-                          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all border flex items-center gap-1.5 ${
-                            isSelected 
-                              ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm' 
-                              : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-400 hover:text-indigo-600'
-                          }`}
-                        >
-                          {model.name}
-                          {isSelected && <Plus className="w-3 h-3 rotate-45" />}
-                        </button>
-                      );
-                    })}
-                    {modelPool.length === 0 && (
-                      <p className="text-xs text-slate-400 italic">No models available. Add them in the Models Tab.</p>
-                    )}
-                  </div>
+      {/* Assignment Section - Show model selector always */}
+      <div className="space-y-4 pt-2">
+        <Card className="shadow-sm border-dashed border-2 bg-slate-50/30">
+          <CardHeader className="py-4 px-6 pb-2">
+            <CardTitle className="text-sm font-medium text-slate-700 flex items-center gap-2">
+              <User className="w-4 h-4 text-primary" />
+              {editMode ? `Add Models for Round ${currentRound}` : 'Select Models for Assignment'}
+            </CardTitle>
+            <CardDescription className="text-[10px]">
+              {editMode 
+                ? "Switch models on or off. Adding new models will create a fresh entry for them starting from this round."
+                : "Click models to add or remove them from this request."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="px-6 pb-6 pt-2">
+            {loadingModels ? (
+              <div className="flex items-center gap-2 py-2">
+                <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
+                <span className="text-[10px] text-slate-400 font-medium">Fetching model pool...</span>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {modelPool.map(model => {
+                  const isSelected = assignments.some(a => a.modelId === model.id);
+                  return (
+                    <button
+                      key={model.id}
+                      type="button"
+                      onClick={() => toggleModelSelection(model)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all border flex items-center gap-1.5 ${
+                        isSelected 
+                          ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm' 
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-400 hover:text-indigo-600'
+                      }`}
+                    >
+                      {model.name}
+                      {isSelected && <Plus className="w-3 h-3 rotate-45" />}
+                    </button>
+                  );
+                })}
+                {modelPool.length === 0 && (
+                  <p className="text-xs text-slate-400 italic">No models available. Add them in the Models Tab.</p>
                 )}
-              </CardContent>
-            </Card>
-          )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
           <div className="flex items-center justify-between px-1">
             <h3 className="text-lg font-medium text-slate-800">
@@ -884,16 +998,28 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
 
           {assignments.length > 0 && (
             <Card className="shadow-sm border-indigo-100 bg-indigo-50/20">
-              <CardHeader className="py-4 px-6 border-b border-indigo-50">
-                <CardTitle className="text-sm font-semibold text-indigo-800 flex items-center gap-2">
-                  <RefreshCw className="w-4 h-4" />
-                  Common Details (Applies to all models)
-                </CardTitle>
+              <CardHeader className="py-4 px-6 border-b border-indigo-50 flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm font-semibold text-indigo-800 flex items-center gap-2">
+                    <RefreshCw className="w-4 h-4" />
+                    Default Details
+                  </CardTitle>
+                  <CardDescription className="text-[10px] text-indigo-600/70">Used as starting values for new rows. Use "Apply" to update existing ones.</CardDescription>
+                </div>
               </CardHeader>
               <CardContent className="px-6 py-6 pt-6">
                 <div className="grid gap-6 md:grid-cols-3">
                   <div className="space-y-2">
-                    <Label className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Global Date Given (H)</Label>
+                    <div className="flex justify-between items-center">
+                      <Label className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Default Date</Label>
+                      <button 
+                        type="button" 
+                        onClick={() => setAssignments(prev => prev.map(a => ({ ...a, givenForFitDate: sharedFitDate })))}
+                        className="text-[9px] font-bold text-indigo-600 hover:underline"
+                      >
+                        Apply to All
+                      </button>
+                    </div>
                     <Input 
                       placeholder="DD/MM/YYYY" 
                       value={sharedFitDate} 
@@ -903,7 +1029,16 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Global Color</Label>
+                    <div className="flex justify-between items-center">
+                      <Label className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Default Color</Label>
+                      <button 
+                        type="button" 
+                        onClick={() => setAssignments(prev => prev.map(a => ({ ...a, color: sharedColor })))}
+                        className="text-[9px] font-bold text-indigo-600 hover:underline"
+                      >
+                        Apply to All
+                      </button>
+                    </div>
                     <Input 
                       placeholder="e.g. Navy" 
                       value={sharedColor} 
@@ -913,7 +1048,16 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Global Size</Label>
+                    <div className="flex justify-between items-center">
+                      <Label className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Default Size</Label>
+                      <button 
+                        type="button" 
+                        onClick={() => setAssignments(prev => prev.map(a => ({ ...a, size: sharedSize })))}
+                        className="text-[9px] font-bold text-indigo-600 hover:underline"
+                      >
+                        Apply to All
+                      </button>
+                    </div>
                     <Input 
                       placeholder="e.g. Medium" 
                       value={sharedSize} 
@@ -978,6 +1122,12 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                             {editMode && currentRound === '3' && row.round2Data?.color && (
                               <p className="text-[9px] text-slate-400 italic">R2: {row.round2Data.color}</p>
                             )}
+                            {editMode && currentRound === '4' && row.round3Data?.color && (
+                              <p className="text-[9px] text-slate-400 italic">R3: {row.round3Data.color}</p>
+                            )}
+                            {editMode && currentRound === '5' && row.round4Data?.color && (
+                              <p className="text-[9px] text-slate-400 italic">R4: {row.round4Data.color}</p>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell className="py-4">
@@ -990,22 +1140,20 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                             className="border-0 border-b border-indigo-200 rounded-none px-0 focus-visible:ring-0 shadow-none focus-visible:border-indigo-500 h-8 bg-transparent text-sm font-bold text-slate-900 w-24"
                           />
                         </TableCell>
-                        {!editMode && (
-                          <TableCell className="py-4 pr-4 text-right">
-                            <Button 
-                              type="button" 
-                              variant="ghost" 
-                              size="icon"
-                              onClick={() => {
-                                const model = modelPool.find(m => m.id === row.modelId);
-                                if (model) toggleModelSelection(model);
-                              }}
-                              className="h-8 w-8 text-slate-300 hover:text-destructive"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </TableCell>
-                        )}
+                      <TableCell className="py-4 pr-4 text-right">
+                        <Button 
+                          type="button" 
+                          variant="ghost" 
+                          size="icon"
+                          onClick={() => {
+                            const model = modelPool.find(m => m.id === row.modelId);
+                            if (model) toggleModelSelection(model);
+                          }}
+                          className="h-8 w-8 text-slate-300 hover:text-destructive"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

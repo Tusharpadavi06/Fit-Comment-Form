@@ -78,8 +78,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
     
     const hex1 = (h1 >>> 0).toString(16).padStart(8, '0');
     const hex2 = (h2 >>> 0).toString(16).padStart(8, '0');
-    const hex3 = (h1 ^ 0x6E616E6F).toString(16).padStart(8, '0');
-    const hex4 = (h2 ^ 0x62756C6C).toString(16).padStart(8, '0');
+    const hex3 = ((h1 ^ 0x6E616E6F) >>> 0).toString(16).padStart(8, '0');
+    const hex4 = ((h2 ^ 0x62756C6C) >>> 0).toString(16).padStart(8, '0');
     
     const fullHex = (hex1 + hex2 + hex3 + hex4).substring(0, 32);
     

@@ -48,9 +48,11 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         const sId = (submissionId || "").trim();
         let aId = (assignmentId || "").trim();
         
-        // Sanitize aId - strip prefixes from old links
+        // Sanitize aId - handle prefixes from old links and potential malformed characters
         if (aId.startsWith('new-')) aId = aId.substring(4);
-        if (aId.startsWith('merged_')) aId = aId.substring(7);
+        
+        // Remove double hyphens if present (legacy bug fix)
+        aId = aId.replace(/--/g, '-');
         
         console.log("Fetching matching data for Style:", sId, "Assignment:", aId, "Round:", round);
         
@@ -64,12 +66,11 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         let assData: any = null;
 
       // 1. Try Firestore FIRST (Primary source in this env)
-      const firestoreAId = aId;
       let firestoreFailed = false;
       try {
-        console.log("Attempting Firestore fetch for:", sId, firestoreAId);
+        console.log("Attempting Firestore fetch for:", sId, aId);
         const subRef = doc(db, 'submissions', sId);
-        const assRef = doc(db, 'assignments', firestoreAId);
+        const assRef = doc(db, 'assignments', aId);
         
         const [subDoc, assDoc] = await Promise.all([
           getDoc(subRef).catch(e => { console.warn("Firestore Sub error:", e); firestoreFailed = true; return null; }),
@@ -97,16 +98,15 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           try {
             console.log("Checking Supabase for IDs:", sId, aId);
             if (!subData) {
-              const { data: sList, error: sErr } = await supabase
+              const { data: sList } = await supabase
                 .from('submissions')
                 .select('*')
-                .eq('id', sId);
+                .eq('id', sId)
+                .maybeSingle();
               
-              if (sList && sList.length > 0) {
-                subData = sList[0];
+              if (sList) {
+                subData = sList;
                 console.log("Supabase submission found");
-              } else if (sErr) {
-                console.warn("Supabase sub fetch error:", sErr);
               }
             }
 
@@ -114,37 +114,48 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
               // Priority 1: Fetch by Assignment ID
               console.log("Fetching assignment by ID:", aId);
               try {
-                const { data: aList, error: aErr } = await supabase
-                  .from('assignments')
-                  .select('*')
-                  .eq('id', aId);
+                // Only try UUID lookup if it looks like a valid UUID (no crazy chars)
+                if (aId.length >= 32) {
+                  const { data: aList, error: aErr } = await supabase
+                    .from('assignments')
+                    .select('*')
+                    .eq('id', aId);
 
-                if (aList && aList.length > 0) {
-                  assData = aList[0];
-                  console.log("Supabase assignment found by ID");
-                } else if (aErr) {
-                  console.warn("Supabase assignment initial fetch error:", aErr);
+                  if (aList && aList.length > 0) {
+                    assData = aList[0];
+                    console.log("Supabase assignment found by exact ID");
+                  }
                 }
               } catch (e: any) {
-                console.warn("Supabase assignment ID query exception (retrying fallback):", e.message);
+                console.warn("Supabase assignment ID query failed (skipped to fallback):", e.message);
               }
 
-              // Priority 2: Fallback - Fetch by submission_id if we have it and ID lookup failed or gave 400
+              // Priority 2: Fallback - Fetch by submission_id if we have it
               if (!assData && sId) {
                  console.log("Fallback: searching for assignment by submission_id:", sId);
                  try {
-                   const { data: fallbackList, error: fErr } = await supabase
+                   const { data: fallbackList } = await supabase
                      .from('assignments')
                      .select('*')
                      .eq('submission_id', sId)
-                     .limit(20);
+                     .limit(50);
                    
                    if (fallbackList && fallbackList.length > 0) {
-                     // Try to match by assignmentId or email if available
-                     assData = fallbackList.find(a => a.id === aId || a.model_email?.includes(aId) || a.model_name?.includes(aId)) || fallbackList[0];
-                     console.log("Supabase assignment found via submission fallback");
-                   } else if (fErr) {
-                     console.warn("Supabase fallback fetch error:", fErr);
+                     // VERY aggressive match: by ID, or if any part of the name/email matches the aId string
+                     // This recovers data from legacy links that might be malformed
+                     const cleanAId = aId.toLowerCase();
+                     assData = fallbackList.find(a => 
+                        a.id === aId || 
+                        (a.model_email && cleanAId.includes(a.model_email.toLowerCase().split('@')[0])) ||
+                        (a.model_name && cleanAId.includes(a.model_name.toLowerCase().replace(/\s/g, '')))
+                     );
+                     
+                     // Absolute fallback: just take the first one if only one exists for this style
+                     if (!assData && fallbackList.length === 1) {
+                       assData = fallbackList[0];
+                     }
+                     
+                     if (assData) console.log("Supabase assignment found via submission fallback match");
                    }
                  } catch (fe: any) {
                     console.warn("Supabase fallback exception:", fe.message);
@@ -152,7 +163,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
               }
             }
           } catch (se: any) {
-            console.log("Supabase fetch exception:", se.message);
+            console.warn("Supabase fetch exception (handled):", se.message);
           }
         }
         

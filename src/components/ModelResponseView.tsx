@@ -48,10 +48,9 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         const sId = (submissionId || "").trim();
         let aId = (assignmentId || "").trim();
         
-        // Sanitize aId - strip 'new-' prefix if present from old links
-        if (aId.startsWith('new-')) {
-          aId = aId.substring(4);
-        }
+        // Sanitize aId - strip prefixes from old links
+        if (aId.startsWith('new-')) aId = aId.substring(4);
+        if (aId.startsWith('merged_')) aId = aId.substring(7);
         
         console.log("Fetching matching data for Style:", sId, "Assignment:", aId, "Round:", round);
         
@@ -114,32 +113,42 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
             if (!assData && aId) {
               // Priority 1: Fetch by Assignment ID
               console.log("Fetching assignment by ID:", aId);
-              const { data: aList, error: aErr } = await supabase
-                .from('assignments')
-                .select('*')
-                .eq('id', aId);
+              try {
+                const { data: aList, error: aErr } = await supabase
+                  .from('assignments')
+                  .select('*')
+                  .eq('id', aId);
 
-              if (aList && aList.length > 0) {
-                assData = aList[0];
-                console.log("Supabase assignment found by ID");
-              } else {
-                if (aErr) console.warn("Supabase assignment fetch error:", aErr);
-                
-                // Priority 2: Fallback - Fetch by submission_id if we have it and ID lookup failed
-                if (sId) {
-                   console.log("Fallback: searching for assignment by submission_id:", sId);
-                   const { data: fallbackList } = await supabase
+                if (aList && aList.length > 0) {
+                  assData = aList[0];
+                  console.log("Supabase assignment found by ID");
+                } else if (aErr) {
+                  console.warn("Supabase assignment initial fetch error:", aErr);
+                }
+              } catch (e: any) {
+                console.warn("Supabase assignment ID query exception (retrying fallback):", e.message);
+              }
+
+              // Priority 2: Fallback - Fetch by submission_id if we have it and ID lookup failed or gave 400
+              if (!assData && sId) {
+                 console.log("Fallback: searching for assignment by submission_id:", sId);
+                 try {
+                   const { data: fallbackList, error: fErr } = await supabase
                      .from('assignments')
                      .select('*')
                      .eq('submission_id', sId)
-                     .limit(10);
+                     .limit(20);
                    
                    if (fallbackList && fallbackList.length > 0) {
-                     // Try to match by assignmentId if it was a row index or partial match
-                     assData = fallbackList.find(a => a.id === aId) || fallbackList[0];
+                     // Try to match by assignmentId or email if available
+                     assData = fallbackList.find(a => a.id === aId || a.model_email?.includes(aId) || a.model_name?.includes(aId)) || fallbackList[0];
                      console.log("Supabase assignment found via submission fallback");
+                   } else if (fErr) {
+                     console.warn("Supabase fallback fetch error:", fErr);
                    }
-                }
+                 } catch (fe: any) {
+                    console.warn("Supabase fallback exception:", fe.message);
+                 }
               }
             }
           } catch (se: any) {

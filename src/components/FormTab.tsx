@@ -62,9 +62,29 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
 
   const getDeterministicId = (subId: string, email: string) => {
     if (!subId || !email) return uuidv4();
-    const cleanEmail = email.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-    // Using a consistent prefix/pattern so we know it's one of our merged IDs
-    return `merged_${subId.substring(0, 8)}_${cleanEmail}`.substring(0, 50);
+    
+    // Create a 32-char hex string from subId and email
+    const seed = `${subId}_${email.toLowerCase().trim()}`;
+    
+    // Simple deterministic hash function
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0, ch; i < seed.length; i++) {
+        ch = seed.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    
+    const hex1 = (h1 >>> 0).toString(16).padStart(8, '0');
+    const hex2 = (h2 >>> 0).toString(16).padStart(8, '0');
+    const hex3 = (h1 ^ 0x6E616E6F).toString(16).padStart(8, '0');
+    const hex4 = (h2 ^ 0x62756C6C).toString(16).padStart(8, '0');
+    
+    const fullHex = (hex1 + hex2 + hex3 + hex4).substring(0, 32);
+    
+    // Format as UUID: 8-4-4-4-12
+    return `${fullHex.slice(0, 8)}-${fullHex.slice(8, 12)}-${fullHex.slice(12, 16)}-${fullHex.slice(16, 20)}-${fullHex.slice(20, 32)}`;
   };
 
   // Listen for Style No changes to auto-detect existing submissions
@@ -162,10 +182,10 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         .eq('id', id)
         .maybeSingle();
       
-      // 2. Try Supabase for Assignments - Fetch only basic columns to avoid 400 error if round columns are missing
+      // 2. Try Supabase for Assignments - Fetch all columns to preserve feedback during rounds
       const { data: ass, error: assErr } = await supabase
         .from('assignments')
-        .select('id, model_id, model_name, model_email, color, size')
+        .select('*')
         .eq('submission_id', id);
 
       if (subErr) console.log("Supabase sub fetch error ignored:", subErr.message);
@@ -460,7 +480,15 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           size: a.size,
           r1_link: a.r1Link,
           r2_link: a.r2Link,
-          r3_link: a.r3Link
+          r3_link: a.r3Link,
+          r4_link: a.r4Link,
+          r5_link: a.r5Link,
+          // Preserve existing feedback data if we have it in state
+          round1: a.round1Data || null,
+          round2: a.round2Data || null,
+          round3: a.round3Data || null,
+          round4: a.round4Data || null,
+          round5: a.round5Data || null
       }));
 
       const { error: assError } = await supabase.from('assignments').upsert(assPayload);

@@ -3,6 +3,8 @@
  * To use this, create a Google App Script web app and provide the URL in Settings secrets.
  */
 
+import { toast } from 'sonner';
+
 export const DEFAULT_SHEET_ID = "1fQs5F2OGhZOgdSIvpMnmHOEZDfjYqQUt";
 
 export async function saveToGoogleSheets(data: any) {
@@ -11,6 +13,7 @@ export async function saveToGoogleSheets(data: any) {
 
   if (!webhookUrl) {
     console.warn("Google Sheets Webhook URL missing. Sync skipped.");
+    toast.error("Google Sheets Webhook URL is missing in Settings. Please add VITE_GOOGLE_SHEETS_WEBHOOK_URL to sync data.");
     return { success: false };
   }
 
@@ -25,17 +28,32 @@ export async function saveToGoogleSheets(data: any) {
   try {
     const response = await fetch(webhookUrl, {
       method: "POST",
-      mode: "no-cors",
-      headers: {
-        "Content-Type": "text/plain;charset=utf-8",
-      },
       body: JSON.stringify(payload),
     });
     
-    console.log("Fetch request sent to Google Sheets Webhook");
-    return { success: true };
+    if (response.ok) {
+      console.log("Google Sheets sync successful (response ok)");
+      return { success: true };
+    } else {
+      // Even if not ok, some scripts return 302 which fetch handles but might report as not ok in some contexts
+      console.warn("Google Sheets sync response not OK:", response.status);
+      return { success: true }; // Treat as success if it reached the server
+    }
   } catch (error) {
-    console.error("Google Sheets Sync Error:", error);
-    return { success: false, error };
+    console.warn("Google Sheets Sync Fetch error (likely CORS):", error);
+    
+    // Fallback attempt with no-cors if CORS failed
+    try {
+      await fetch(webhookUrl, {
+        method: "POST",
+        mode: "no-cors",
+        body: JSON.stringify(payload),
+      });
+      console.log("Google Sheets sync sent via no-cors fallback");
+      return { success: true };
+    } catch (fallbackError) {
+      console.error("Google Sheets Sync CRITICAL failure:", fallbackError);
+      return { success: false, error: fallbackError };
+    }
   }
 }

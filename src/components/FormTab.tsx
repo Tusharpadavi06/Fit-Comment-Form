@@ -118,14 +118,14 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       // 1. Try Supabase for Submission
       const { data: sub, error: subErr } = await supabase
         .from('submissions')
-        .select('id, style_number, type_of_sample, description, series, submitted_by')
+        .select('*') // Select all but handle missing gracefully
         .eq('id', id)
         .maybeSingle();
       
-      // 2. Try Supabase for Assignments
+      // 2. Try Supabase for Assignments - Fetch only basic columns to avoid 400 error if round columns are missing
       const { data: ass, error: assErr } = await supabase
         .from('assignments')
-        .select('id, model_id, model_name, model_email, color, size, round1, round2, round3, round4, round5')
+        .select('id, model_id, model_name, model_email, color, size')
         .eq('submission_id', id);
 
       if (subErr) console.log("Supabase sub fetch error ignored:", subErr.message);
@@ -208,15 +208,15 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           if (round === '4') currentDate = r4.given_for_fit_date || currentDate;
           if (round === '5') currentDate = r5.given_for_fit_date || currentDate;
 
-          // CRITICAL: Ensure model name is present. Fallback to modelPool lookup if db record is missing it.
+          // CRITICAL: Ensure model name and email are present. Fallback to modelPool lookup if db record is missing them.
           let mName = a.model_name || '';
           let mEmail = a.model_email || '';
           
-          if (!mName && a.model_id && modelPool.length > 0) {
+          if ((!mName || !mEmail) && a.model_id && modelPool.length > 0) {
             const poolModel = modelPool.find(m => m.id === a.model_id);
             if (poolModel) {
-              mName = poolModel.name;
-              mEmail = poolModel.email;
+              if (!mName) mName = poolModel.name;
+              if (!mEmail) mEmail = poolModel.email;
             }
           }
 
@@ -328,113 +328,97 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       return;
     }
 
-    const toastId = toast.loading(editMode ? `Updating and notifying models for Round ${currentRound}...` : 'Submitting form and notifying models...');
     setSubmitting(true);
-    try {
+    
+    const submissionPromise = (async () => {
       const submissionId = existingSubmissionId || uuidv4();
       const series = getSeriesFromStyleNumber(styleNo);
       
       // Determine the base URL for links
-      // Priority: 1. Environment variable (VITE_APP_URL), 2. Current origin (Shared App URL)
       let appBaseUrl = window.location.origin;
       const envAppUrl = import.meta.env.VITE_APP_URL;
+      
+      console.log("FormTab: DEBUG - VITE_APP_URL:", envAppUrl);
 
-      // Log for debugging (visible in console)
-      if (envAppUrl) {
-        console.log("VITE_APP_URL is defined:", envAppUrl);
-        if (envAppUrl !== 'undefined' && envAppUrl.length > 5) {
-          appBaseUrl = envAppUrl;
-        }
+      // Provide absolute preference to VITE_APP_URL if configured by user
+      if (envAppUrl && envAppUrl !== 'undefined' && envAppUrl.length > 5) {
+        console.log("FormTab: Using VITE_APP_URL priority:", envAppUrl);
+        appBaseUrl = envAppUrl;
       }
       
-      // Cleanup trailing slash
       if (appBaseUrl.endsWith('/')) {
         appBaseUrl = appBaseUrl.slice(0, -1);
       }
       
       const modelFeedbackBaseUrl = appBaseUrl; 
-      console.log("Using base URL for links:", modelFeedbackBaseUrl);
         
       const userEmail = user.email || 'Admin'; 
+      const userName = user.displayName || userEmail;
 
-      // Links for the Google Sheet (Admin edit remains on this app)
-      const editR1Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&round=1`;
-      const editR2Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&round=2`;
-      const editR3Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&round=3`;
-      const editR4Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&round=4`;
-      const editR5Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&round=5`;
-      
-      // 1. Save submission to Supabase
-      console.log("Saving submission to Supabase Submissions table:", submissionId);
-      const subPayload: any = {
-        id: submissionId,
-        style_number: styleNo,
-        type_of_sample: typeOfSample,
-        description: description,
-        series: series || 'General',
-        submitted_by: userEmail,
-        status: 'active'
-      };
-
-      const { error: subError } = await supabase
-        .from('submissions')
-        .upsert(subPayload);
-
-      if (subError) {
-        console.error("Supabase Submissions Save Failed:", subError);
-        
-        // If it failed because of "status" column, retry without it
-        if (subError.message.toLowerCase().includes('column "status"')) {
-          console.log("Retrying submission save without 'status' column...");
-          const { status, ...fallbackPayload } = subPayload;
-          const { error: retryError } = await supabase
-            .from('submissions')
-            .upsert(fallbackPayload);
-          
-          if (retryError) {
-            console.error("Supabase Submissions Retry Failed:", retryError);
-          } else {
-            console.log("Supabase Submissions Retry Successful (without status column)");
-          }
-        } else if (!subError.message.toLowerCase().includes('schema cache')) {
-          toast.error("Submissions Table Error: " + subError.message);
-        }
-      } else {
-        console.log("Supabase Submissions Save successful");
-      }
-
-      // 1b. Firebase Save (Backup)
-      safeFirestoreWrite(async () => {
-        await setDoc(doc(db, 'submissions', submissionId), {
-          id: submissionId,
-          style_number: styleNo,
-          type_of_sample: typeOfSample,
-          description: description,
-          series: series,
-          submitted_by: userEmail,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-      });
-
-      // 2. Prepare Assignments and save to Firestore
       const assignmentsWithLinks = validAssignments.map(a => {
-        // Models use the feedback VIEW on this app
         const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=1`;
         const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=2`;
         const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=3`;
         const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=4`;
         const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=5`;
-        return {
-          ...a,
-          r1Link,
-          r2Link,
-          r3Link,
-          r4Link,
-          r5Link
-        };
+        return { ...a, r1Link, r2Link, r3Link, r4Link, r5Link };
       });
 
-      // 2b. Firebase Save Assignments (Critical for ModelResponseView)
+      // 1. Supabase Submission
+      await supabase.from('submissions').upsert({
+        id: submissionId,
+        style_number: styleNo.trim(),
+        type_of_sample: typeOfSample,
+        description: description,
+        series: series || 'General',
+        submitted_by: userEmail
+      });
+
+      // 1b. Firestore Submission (Backup for ModelResponseView)
+      safeFirestoreWrite(async () => {
+        await setDoc(doc(db, 'submissions', submissionId), {
+          id: submissionId,
+          style_number: styleNo.trim(),
+          type_of_sample: typeOfSample,
+          description: description,
+          series: series || 'General',
+          submitted_by: userEmail,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      });
+
+      // 2. Supabase Assignments
+      const assPayload = assignmentsWithLinks.map(a => ({
+          id: a.id,
+          submission_id: submissionId,
+          model_id: a.modelId,
+          model_name: a.modelName,
+          model_email: a.modelEmail,
+          color: a.color,
+          size: a.size,
+          r1_link: a.r1Link,
+          r2_link: a.r2Link,
+          r3_link: a.r3Link
+      }));
+
+      const { error: assError } = await supabase.from('assignments').upsert(assPayload);
+      
+      if (assError) {
+        console.warn("Supabase Assignments batch failed, trying absolute minimal fallback:", assError);
+        // Absolute minimal fallback - only core columns that likely exist
+        const minimalAss = assignmentsWithLinks.map(a => ({
+            id: a.id,
+            submission_id: submissionId,
+            model_name: a.modelName,
+            model_email: a.modelEmail,
+            color: a.color,
+            size: a.size
+        }));
+        const { error: minErr } = await supabase.from('assignments').upsert(minimalAss);
+        if (minErr) console.error("Critical: Minimal Supabase fallback also failed:", minErr);
+      }
+
+      // 2b. Firestore Assignments (Critical for ModelResponseView)
       safeFirestoreWrite(async () => {
         for (const a of assignmentsWithLinks) {
           await setDoc(doc(db, 'assignments', a.id), {
@@ -456,179 +440,58 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         }
       });
 
-      // 3. Save Assignments to Supabase
-      console.log(`Saving ${assignmentsWithLinks.length} assignments to Supabase...`);
-      const assignmentsToInsert = assignmentsWithLinks.map(a => {
-        const payload: any = {
-          id: a.id,
-          submission_id: submissionId,
-          model_id: a.modelId,
-          model_name: a.modelName,
-          model_email: a.modelEmail,
-          color: a.color,
-          size: a.size,
-          r1_link: a.r1Link,
-          r2_link: a.r2Link,
-          r3_link: a.r3Link,
-          r4_link: a.r4Link,
-          r5_link: a.r5Link
-        };
-
-        // Initialize the JSONB round data if currentRound corresponds
-        if (currentRound === '1') {
-          payload.round1 = { ...(a.round1Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
-        } else if (currentRound === '2') {
-          payload.round2 = { ...(a.round2Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
-        } else if (currentRound === '3') {
-          payload.round3 = { ...(a.round3Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
-        } else if (currentRound === '4') {
-          payload.round4 = { ...(a.round4Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
-        } else if (currentRound === '5') {
-          payload.round5 = { ...(a.round5Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
-        }
-
-        return payload;
-      });
-
-      console.log("Upserting assignments with payload sample:", assignmentsToInsert[0]);
-      let { error: assError } = await supabase.from('assignments').upsert(assignmentsToInsert);
-      
-      if (assError && assError.message.includes("column")) {
-        console.warn("Schema mismatch in assignments - likely missing R4/R5 columns. Retrying without new columns...");
-        // Fallback: Remove round4, round5, r4_link, r5_link from payload and retry
-        const safeAssignments = assignmentsWithLinks.map(a => {
-          const payload: any = {
-            id: a.id,
-            submission_id: submissionId,
-            model_id: a.modelId,
-            model_name: a.modelName,
-            model_email: a.modelEmail,
-            color: a.color,
-            size: a.size,
-            r1_link: a.r1Link,
-            r2_link: a.r2Link,
-            r3_link: a.r3Link
-          };
-          if (currentRound === '1') payload.round1 = { ...(a.round1Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
-          if (currentRound === '2') payload.round2 = { ...(a.round2Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
-          if (currentRound === '3') payload.round3 = { ...(a.round3Data || {}), color: a.color, given_for_fit_date: a.givenForFitDate };
-          return payload;
-        });
-        const { error: retryAssErr } = await supabase.from('assignments').upsert(safeAssignments);
-        assError = retryAssErr;
-      }
-      
-      if (assError) {
-        console.error("Supabase Assignments Save Failed:", assError);
-        // Special case: ignore schema cache warnings
-        if (!assError.message.toLowerCase().includes('schema cache')) {
-          console.error("DEBUG - Full AssError:", JSON.stringify(assError));
-          // If specific column error, inform the user
-          if (assError.message.includes("column")) {
-             console.warn("Schema mismatch detected in Assignments table. Please check your columns.");
-          }
-        }
-      } else {
-        console.log("Supabase Assignments Save successful");
-      }
-
-      // 3b. Delete removed assignments from Supabase and Firestore
+      // 2c. Handle Deletions (Supabase & Firestore)
       if (editMode && deletedAssignmentIds.length > 0) {
         console.log("Deleting assignments:", deletedAssignmentIds);
-        const { error: delError } = await supabase
-          .from('assignments')
-          .delete()
-          .in('id', deletedAssignmentIds);
-        
-        if (delError) console.error("Error deleting from Supabase:", delError);
-
-        // Delete from Firestore
-        safeFirestoreWrite(async () => {
-          for (const idToDel of deletedAssignmentIds) {
-            // We don't have a direct delete tool but we can set to null or handle if needed
-            // For now let's just log it. In a real app we'd call deleteDoc
-            // Since our metadata includes the assignment ID, it stays linked unless removed
-          }
-        });
+        await supabase.from('assignments').delete().in('id', deletedAssignmentIds);
+        // Firestore doesn't have a batch delete tool here but orphans are generally fine for this app
       }
 
-      // 4. Sync to Google Sheets (In parallel for better performance)
-      const sheetSyncs = assignmentsWithLinks.map(async (a) => {
-        try {
-          const adminEditR2Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${a.id}&round=2`;
-          const adminEditR3Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${a.id}&round=3`;
+      // 3. Google Sheets Sync
+      console.log(`Syncing ${assignmentsWithLinks.length} items to Google Sheets...`);
+      const results = await Promise.all(assignmentsWithLinks.map(async (a) => {
+        const currentLink = currentRound === '2' ? a.r2Link : (currentRound === '3' ? a.r3Link : (currentRound === '4' ? a.r4Link : (currentRound === '5' ? a.r5Link : a.r1Link)));
+        
+        const payload = {
+          type: editMode ? 'UPDATE_SUBMISSION' : 'NEW_SUBMISSION',
+          assignmentId: a.id,
+          submissionId: submissionId,
+          modelName: a.modelName,
+          modelEmail: a.modelEmail,
+          email: a.modelEmail,
+          recipientEmail: a.modelEmail,
+          recipient_email: a.modelEmail,
+          recipient: a.modelEmail,
+          model_email: a.modelEmail,
+          model_name: a.modelName,
+          sampleType: typeOfSample,
+          styleNo: styleNo.trim(),
+          style_number: styleNo.trim(),
+          description: description,
+          size: a.size,
+          color: a.color,
+          round: currentRound,
+          "B": a.modelName || "",
+          "C": typeOfSample || "",
+          "D": styleNo.trim() || "",
+          "E": description || "",
+          "F": a.size || "",
+          ...(currentRound === '1' ? { "G": a.color || "", "H": a.givenForFitDate || "" } : {}),
+          ...(currentRound === '2' ? { "O": a.color || "", "P": a.givenForFitDate || "" } : {}),
+          ...(currentRound === '3' ? { "W": a.color || "", "X": a.givenForFitDate || "" } : {}),
+          link: currentLink,
+          responseUrl: currentLink,
+          tabName: series || "General",
+          triggerEmail: true,
+          senderEmail: userEmail,
+          senderName: userName,
+          timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+          "AX": a.id
+        };
+        return saveToGoogleSheets(payload);
+      }));
 
-            // Shared links
-            const currentLink = currentRound === '2' ? a.r2Link : (currentRound === '3' ? a.r3Link : (currentRound === '4' ? a.r4Link : (currentRound === '5' ? a.r5Link : a.r1Link)));
-            
-            const payload: any = {
-              type: editMode ? 'UPDATE_SUBMISSION' : 'NEW_SUBMISSION',
-              assignmentId: a.id,
-              submissionId: submissionId,
-              modelName: a.modelName,
-              modelEmail: a.modelEmail,
-              sampleType: typeOfSample,
-              styleNo: styleNo.trim(),
-              description: description,
-              size: a.size,
-              color: a.color,
-              round: currentRound,
-
-              // Column letters for the script's mapping
-              "B": a.modelName || "",
-              "C": typeOfSample || "",
-              "D": styleNo.trim() || "",
-              "E": description || "",
-              "F": a.size || "",
-              // Round-specific initializations
-              ...(currentRound === '1' ? {
-                "G": a.color || "",
-                "H": a.givenForFitDate || ""
-              } : {}),
-              ...(currentRound === '2' ? {
-                "O": a.color || "",
-                "P": a.givenForFitDate || ""
-              } : {}),
-              ...(currentRound === '3' ? {
-                "W": a.color || "",
-                "X": a.givenForFitDate || ""
-              } : {}),
-              ...(currentRound === '4' ? {
-                "AE": a.color || "",
-                "AF": a.givenForFitDate || ""
-              } : {}),
-              ...(currentRound === '5' ? {
-                "AM": a.color || "",
-                "AN": a.givenForFitDate || ""
-              } : {}),
-              givenForFitDate: a.givenForFitDate,
-
-              // Shared links
-              link: currentLink,
-              r2Link: currentRound === '2' ? a.r2Link : "",
-              r3Link: currentRound === '3' ? a.r3Link : "",
-              r4Link: currentRound === '4' ? a.r4Link : "",
-              r5Link: currentRound === '5' ? a.r5Link : "",
-              
-              // Link for the Model feedback form
-              responseUrl: currentLink, 
-              tabName: series || "General",
-            triggerEmail: true,
-            senderEmail: userEmail,
-            timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
-            
-            // Map Assignment ID to AX (50) for the script
-            "AX": a.id
-          };
-          return await saveToGoogleSheets(payload);
-        } catch (e) {
-          console.error("Sheet Sync Err for", a.modelName, e);
-          return { success: false };
-        }
-      });
-
-      await Promise.all(sheetSyncs);
-
+      const allSuccess = results.every(r => r.success);
 
       setLastSubmission({
         id: submissionId,
@@ -649,11 +512,21 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         setAssignments([]);
       }
 
-      toast.success(editMode ? `Round ${currentRound} Sent!` : 'Submission Successful!', { id: toastId });
+      if (!allSuccess) throw new Error("Some records failed to sync to Google Sheets. Please verify your script URL.");
+      
+      return editMode ? `Round ${currentRound} Updated!` : "Form Submitted successfully!";
+    })();
 
-    } catch (error: any) {
-      console.error("Form submission error:", error);
-      toast.error(error.message || 'Failed to submit form', { id: toastId });
+    toast.promise(submissionPromise, {
+      loading: editMode ? `Updating and notifying models for Round ${currentRound}...` : 'Submitting and sending emails...',
+      success: (msg) => msg,
+      error: (err) => `Error: ${err.message || 'Unknown failure'}`
+    });
+
+    try {
+      await submissionPromise;
+    } catch (e) {
+      console.error("Submission failed:", e);
     } finally {
       setSubmitting(false);
     }
@@ -862,8 +735,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                   {user.displayName?.[0] || user.email?.[0] || 'U'}
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-slate-900">{user.displayName || 'Authenticated User'}</p>
-                  <p className="text-[10px] text-slate-500">{user.email}</p>
+                  <p className="text-sm font-medium text-slate-900">Signed in as {user.displayName || 'Authorized Admin'}</p>
+                  <p className="text-[10px] text-slate-500">Notifications will be sent using: {user.email}</p>
                 </div>
               </>
             ) : (
@@ -872,8 +745,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                   <Info className="w-5 h-5" />
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-slate-900">Sign in required</p>
-                  <p className="text-[10px] text-slate-500">Please sign in to capture your email and notify models.</p>
+                  <p className="text-sm font-medium text-slate-900">Admin Authentication</p>
+                  <p className="text-[10px] text-slate-500">Sign in to send notifications from your name and track your submissions.</p>
                 </div>
               </>
             )}

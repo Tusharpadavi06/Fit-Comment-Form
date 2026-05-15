@@ -98,13 +98,16 @@ export default function App() {
       <div className="w-full h-2.5 bg-primary rounded-t-lg hidden md:block"></div>
       
       <main className="max-w-2xl mx-auto mt-6 px-4 pb-20">
-        {/* Header Image and Box */}
         <div className="mb-6 rounded-xl overflow-hidden bg-white shadow-sm border border-slate-200">
-          <img 
-            src="https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?auto=format&fit=crop&q=80&w=1200&h=300" 
-            alt="Apparel Management" 
-            className="w-full h-40 object-cover"
-          />
+          <a href="https://ibb.co/dsWLS09q" target="_blank" rel="noopener noreferrer" className="block outline-none">
+            <img 
+              src="https://i.ibb.co/1Yvd3fV5/Chat-GPT-Image-May-15-2026-11-52-16-AM.png" 
+              alt="Lingerie Survey Header" 
+              className="w-full h-48 object-cover block bg-pink-50 hover:opacity-95 transition-opacity"
+              loading="eager"
+              referrerPolicy="no-referrer"
+            />
+          </a>
           <div className="p-6 border-b">
             <h1 className="text-2xl font-normal text-slate-900 tracking-tight">Sample Fit Request</h1>
             <p className="text-xs text-slate-500 mt-1 leading-relaxed">

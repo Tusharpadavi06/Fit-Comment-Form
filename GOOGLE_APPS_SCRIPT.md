@@ -112,6 +112,24 @@ function doPost(e) {
       updateCell(sheet, row, "AC", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AC);
       // Removed Link from AD
     }
+    else if (round === "4") {
+      updateCell(sheet, row, "AE", data.color || data.AE); 
+      updateCell(sheet, row, "AF", data.givenForFitDate || data.AF); 
+      updateCell(sheet, row, "AG", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.AG); 
+      updateCell(sheet, row, "AH", data.receivedDate || data.received_date || data.AH);
+      updateCell(sheet, row, "AI", data.beforeWash || data.before_wash || data.AI);
+      updateCell(sheet, row, "AJ", data.afterWash || data.after_wash || data.AJ);
+      updateCell(sheet, row, "AK", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AK);
+    }
+    else if (round === "5") {
+      updateCell(sheet, row, "AM", data.color || data.AM); 
+      updateCell(sheet, row, "AN", data.givenForFitDate || data.AN); 
+      updateCell(sheet, row, "AO", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.AO); 
+      updateCell(sheet, row, "AP", data.receivedDate || data.received_date || data.AP);
+      updateCell(sheet, row, "AQ", data.beforeWash || data.before_wash || data.AQ);
+      updateCell(sheet, row, "AR", data.afterWash || data.after_wash || data.AR);
+      updateCell(sheet, row, "AS", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AS);
+    }
     
     // 8. Handle automatic email notification
     if (data.triggerEmail) {
@@ -136,7 +154,9 @@ function getSheetWithHeaders(ss, sheetName) {
       "Timestamp", "Model Name", "Type of sample", "Style no", "Description", "Size", 
       "R1 Color", "R1 Fit Date", "R1 Comments Date", "R1 Received", "R1 Before Wash", "R1 After Wash", "R1 Fabric/Trims", "R1 Feedback",
       "R2 Color", "R2 Fit Date", "R2 Comments Date", "R2 Received", "R2 Before Wash", "R2 After Wash", "R2 Fabric/Trims", "R2 Feedback",
-      "R3 Color", "R3 Fit Date", "R3 Comments Date", "R3 Received", "R3 Before Wash", "R3 After Wash", "R3 Fabric/Trims", "R3 Feedback"
+      "R3 Color", "R3 Fit Date", "R3 Comments Date", "R3 Received", "R3 Before Wash", "R3 After Wash", "R3 Fabric/Trims", "R3 Feedback",
+      "R4 Color", "R4 Fit Date", "R4 Comments Date", "R4 Received", "R4 Before Wash", "R4 After Wash", "R4 Fabric/Trims", "R4 Feedback",
+      "R5 Color", "R5 Fit Date", "R5 Comments Date", "R5 Received", "R5 Before Wash", "R5 After Wash", "R5 Fabric/Trims", "R5 Feedback"
     ];
     sheet.appendRow(headers);
     sheet.setFrozenRows(1);
@@ -166,7 +186,8 @@ function updateCell(sheet, row, colName, value) {
     "A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7, "H": 8, "I": 9, "J": 10,
     "K": 11, "L": 12, "M": 13, "N": 14, "O": 15, "P": 16, "Q": 17, "R": 18, "S": 19, "T": 20,
     "U": 21, "V": 22, "W": 23, "X": 24, "Y": 25, "Z": 26, "AA": 27, "AB": 28, "AC": 29, "AD": 30,
-    "AE": 31, "AF": 32, "AX": 50
+    "AE": 31, "AF": 32, "AG": 33, "AH": 34, "AI": 35, "AJ": 36, "AK": 37, "AL": 38, "AM": 39, "AN": 40,
+    "AO": 41, "AP": 42, "AQ": 43, "AR": 44, "AS": 45, "AX": 50
   };
   var colIndex = colMap[colName.toUpperCase()];
   if (colIndex) {
@@ -202,7 +223,9 @@ function sendMail(data) {
   MailApp.sendEmail({
     to: recipient,
     subject: subject,
-    htmlBody: htmlBody
+    htmlBody: htmlBody,
+    replyTo: data.senderEmail,
+    name: (data.senderName || "Fit Comment System")
   });
   
   return ContentService.createTextOutput("Email Sent").setMimeType(ContentService.MimeType.TEXT);
@@ -219,5 +242,7 @@ function sendMail(data) {
    - **G-M**: Round 1 feedback.
    - **O-U**: Round 2 feedback.
    - **W-AC**: Round 3 feedback.
-   - **N, V, AD**: Feedback columns without links.
+   - **AE-AK**: Round 4 feedback.
+   - **AM-AS**: Round 5 feedback.
+   - **N, V, AD, AL, AR**: Feedback columns without links.
 4. **Email Automation**: When the app sends a `SEND_MAIL` instruction, this script uses Google's `MailApp` to send the link directly to the model's inbox.

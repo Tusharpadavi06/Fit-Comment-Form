@@ -66,69 +66,99 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
 
       // 1. Try Firestore FIRST (Primary source in this env)
       const firestoreAId = aId;
+      let firestoreFailed = false;
       try {
         console.log("Attempting Firestore fetch for:", sId, firestoreAId);
         const subRef = doc(db, 'submissions', sId);
         const assRef = doc(db, 'assignments', firestoreAId);
         
         const [subDoc, assDoc] = await Promise.all([
-          getDoc(subRef),
-          getDoc(assRef)
+          getDoc(subRef).catch(e => { console.warn("Firestore Sub error:", e); firestoreFailed = true; return null; }),
+          getDoc(assRef).catch(e => { console.warn("Firestore Ass error:", e); firestoreFailed = true; return null; })
         ]);
         
-        if (subDoc.exists()) {
+        if (subDoc && subDoc.exists()) {
           const d = subDoc.data();
           subData = { id: subDoc.id, ...d };
           console.log("Firestore submission found");
         }
         
-        if (assDoc.exists()) {
+        if (assDoc && assDoc.exists()) {
           const d = assDoc.data();
           assData = { id: assDoc.id, ...d };
           console.log("Firestore assignment found");
         }
       } catch (fe: any) {
-        console.warn("Firestore fetch issue:", fe.message);
+        console.warn("Firestore fetch issue (handled):", fe.message);
+        firestoreFailed = true;
       }
 
-      // 2. Try Supabase ONLY if Firestore missed something
-      if (!subData || !assData) {
-        try {
-          console.log("Falling back to Supabase check for Link ID:", aId);
-          if (!subData) {
-            const { data: sList, error: sErr } = await supabase
-              .from('submissions')
-              .select('*')
-              .eq('id', sId)
-              .limit(1);
-            
-            if (sList && sList.length > 0) {
-              subData = sList[0];
-              console.log("Supabase submission found");
+        // 2. Try Supabase if Firestore missed something or failed
+        if (!subData || !assData || firestoreFailed) {
+          try {
+            console.log("Checking Supabase for IDs:", sId, aId);
+            if (!subData) {
+              const { data: sList, error: sErr } = await supabase
+                .from('submissions')
+                .select('*')
+                .eq('id', sId);
+              
+              if (sList && sList.length > 0) {
+                subData = sList[0];
+                console.log("Supabase submission found");
+              } else if (sErr) {
+                console.warn("Supabase sub fetch error:", sErr);
+              }
             }
-          }
 
-          if (!assData && aId) {
-            const { data: aList, error: aErr } = await supabase
-              .from('assignments')
-              .select('*')
-              .eq('id', aId)
-              .limit(1);
+            if (!assData && aId) {
+              // Priority 1: Fetch by Assignment ID
+              console.log("Fetching assignment by ID:", aId);
+              const { data: aList, error: aErr } = await supabase
+                .from('assignments')
+                .select('*')
+                .eq('id', aId);
 
-            if (aErr) console.error("Supabase assignment fetch error:", aErr);
-
-            if (aList && aList.length > 0) {
-              assData = aList[0];
-              console.log("Supabase assignment found");
+              if (aList && aList.length > 0) {
+                assData = aList[0];
+                console.log("Supabase assignment found by ID");
+              } else {
+                if (aErr) console.warn("Supabase assignment fetch error:", aErr);
+                
+                // Priority 2: Fallback - Fetch by submission_id if we have it and ID lookup failed
+                if (sId) {
+                   console.log("Fallback: searching for assignment by submission_id:", sId);
+                   const { data: fallbackList } = await supabase
+                     .from('assignments')
+                     .select('*')
+                     .eq('submission_id', sId)
+                     .limit(10);
+                   
+                   if (fallbackList && fallbackList.length > 0) {
+                     // Try to match by assignmentId if it was a row index or partial match
+                     assData = fallbackList.find(a => a.id === aId) || fallbackList[0];
+                     console.log("Supabase assignment found via submission fallback");
+                   }
+                }
+              }
             }
+          } catch (se: any) {
+            console.log("Supabase fetch exception:", se.message);
           }
-        } catch (se: any) {
-          console.log("Supabase fetch exception (soft-failing):", se.message);
         }
-      }
         
-        if (subData) setSubmissionData(subData);
-        if (assData) setAssignmentData(assData);
+        // Final fallback: Ensure keys are accessible via both snake_case and camelCase
+        if (subData) {
+          subData.style_number = subData.style_number || subData.styleNo || subData.styleNumber;
+          subData.type_of_sample = subData.type_of_sample || subData.sampleType || subData.typeOfSample;
+          setSubmissionData(subData);
+        }
+        
+        if (assData) {
+          assData.model_name = assData.model_name || assData.modelName;
+          assData.model_email = assData.model_email || assData.modelEmail;
+          setAssignmentData(assData);
+        }
 
         if (!subData && !assData) {
            setError("Data not found. Link may be invalid or not yet updated across databases.");
@@ -276,18 +306,18 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
 
       // 2. Google Sheets Save
       const userEmail = assignmentData.model_email || assignmentData.modelEmail || 'model@example.com'; 
+      const userName = assignmentData.model_name || assignmentData.modelName || userEmail;
       const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID;
       
-      // Determine the base URL for links
+      // Determine absolute preference for VITE_APP_URL
       let appBaseUrl = window.location.origin;
       const envAppUrl = import.meta.env.VITE_APP_URL;
       
-      // Log for debugging
-      if (envAppUrl) {
-        console.log("ModelView: VITE_APP_URL is defined:", envAppUrl);
-        if (envAppUrl !== 'undefined' && envAppUrl.length > 5) {
-          appBaseUrl = envAppUrl;
-        }
+      console.log("ModelView: DEBUG - VITE_APP_URL:", envAppUrl);
+      
+      if (envAppUrl && envAppUrl !== 'undefined' && envAppUrl.length > 5) {
+        console.log("ModelView: Using VITE_APP_URL priority:", envAppUrl);
+        appBaseUrl = envAppUrl;
       }
       
       if (appBaseUrl.endsWith('/')) {
@@ -295,7 +325,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       }
       
       const modelFeedbackBaseUrl = appBaseUrl;
-      console.log("ModelView: Using base URL for feedback links:", modelFeedbackBaseUrl);
+      console.log("ModelView: Final base URL for links:", modelFeedbackBaseUrl);
       
       // Links for the Google Sheet
       const resR1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=1`;
@@ -399,9 +429,13 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         "Round 5 Edit Link": adminEditR5Link
       };
       
-      saveToGoogleSheets(sheetPayload).catch(err => {
-        console.error("Delayed Google Sheets error:", err);
-      });
+      const sheetResult = await saveToGoogleSheets(sheetPayload);
+      if (!sheetResult.success) {
+         console.warn("Google Sheets update failed:", sheetResult.error);
+         toast.error("Feedback saved locally, but failed to sync to Google Sheet. Please inform the administrator.");
+      } else {
+         console.log("Feedback successfully synced to Google Sheets");
+      }
 
       // Automate email for next round if responding to Round 1, 2, 3, or 4
       if (parseInt(round) < 5) {
@@ -428,8 +462,9 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       let appBaseUrl = window.location.origin;
       const envAppUrl = import.meta.env.VITE_APP_URL;
       
-      // Use env URL if set
+      // Use env URL if set (priority)
       if (envAppUrl && envAppUrl !== 'undefined' && envAppUrl.length > 5) {
+        console.log("ModelView: Using VITE_APP_URL for email:", envAppUrl);
         appBaseUrl = envAppUrl;
       }
 
@@ -445,12 +480,20 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         type: 'SEND_MAIL',
         modelEmail: assignmentData.model_email || assignmentData.modelEmail,
         modelName: assignmentData.model_name || assignmentData.modelName,
+        email: assignmentData.model_email || assignmentData.modelEmail,
+        recipientEmail: assignmentData.model_email || assignmentData.modelEmail,
+        recipient_email: assignmentData.model_email || assignmentData.modelEmail,
+        recipient: assignmentData.model_email || assignmentData.modelEmail,
+        model_email:  assignmentData.model_email || assignmentData.modelEmail,
+        senderEmail: submissionData.submitted_by || 'Admin',
+        senderName: "Fit System Notification",
         styleNo: submissionData.style_number || submissionData.styleNo,
         round: String(round),
         date: receivedDate,
         beforeWash: beforeWash,
         afterWash: afterWash,
-        link: nextRound < 6 ? nextRoundLink : null,
+        responseUrl: nextRound < 6 ? nextRoundLink : "",
+        link: nextRound < 6 ? nextRoundLink : "", // Adding both link and responseUrl
         tabName: submissionData.series || "General"
       };
 
@@ -563,9 +606,17 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
 
   return (
     <div className="max-w-2xl mx-auto p-4 md:p-8 space-y-6">
-      {/* Read-Only Sample Details */}
+      {/* Header Image and Box */}
       <Card className="border-0 shadow-sm bg-white overflow-hidden">
-        <div className="h-1.5 bg-primary w-full" />
+        <a href="https://ibb.co/dsWLS09q" target="_blank" rel="noopener noreferrer" className="block outline-none">
+          <img 
+            src="https://i.ibb.co/1Yvd3fV5/Chat-GPT-Image-May-15-2026-11-52-16-AM.png" 
+            alt="Intimate Apparel Feedback" 
+            className="w-full h-40 object-cover block bg-slate-50 hover:opacity-95 transition-opacity"
+            loading="eager"
+            referrerPolicy="no-referrer"
+          />
+        </a>
         <CardHeader className="bg-slate-50/50 border-b">
           <div className="flex justify-between items-center">
             <div>

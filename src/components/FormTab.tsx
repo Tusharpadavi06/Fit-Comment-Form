@@ -60,6 +60,46 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   const [user, setUser] = useState<any>(null);
   const [deletedAssignmentIds, setDeletedAssignmentIds] = useState<string[]>([]);
 
+  const getDeterministicId = (subId: string, email: string) => {
+    if (!subId || !email) return uuidv4();
+    const cleanEmail = email.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    // Using a consistent prefix/pattern so we know it's one of our merged IDs
+    return `merged_${subId.substring(0, 8)}_${cleanEmail}`.substring(0, 50);
+  };
+
+  // Listen for Style No changes to auto-detect existing submissions
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (styleNo && styleNo.length > 3 && !editMode) {
+        checkExistingStyle();
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [styleNo]);
+
+  const checkExistingStyle = async () => {
+    const series = getSeriesFromStyleNumber(styleNo);
+    const { data } = await supabase
+      .from('submissions')
+      .select('id')
+      .eq('style_number', styleNo.trim())
+      .eq('series', series || 'General')
+      .maybeSingle();
+
+    if (data && data.id) {
+      toast.info(`Found existing submission for ${styleNo}. Switching to Update Mode.`, {
+        action: {
+          label: "Load Data",
+          onClick: () => {
+            setEditMode(true);
+            setExistingSubmissionId(data.id);
+            loadExistingSubmission(data.id, '1');
+          }
+        }
+      });
+    }
+  };
+
   // Listen for Auth changes
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser: any) => {
@@ -274,9 +314,11 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         ));
       }
     } else {
-      // row.id mark logic: we don't need 'new-' prefix if we track initial IDs
+      // row.id mark logic: use deterministic ID if we have a submission ID, otherwise a temp uuid
+      const aId = existingSubmissionId ? getDeterministicId(existingSubmissionId, model.email) : uuidv4();
+      
       const newAssignment: AssignmentRow = { 
-        id: uuidv4(), // Use standard UUID
+        id: aId, 
         modelId: model.id, 
         modelName: model.name, 
         modelEmail: model.email, 
@@ -331,9 +373,25 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
     setSubmitting(true);
     
     const submissionPromise = (async () => {
-      const submissionId = existingSubmissionId || uuidv4();
+      let submissionId = existingSubmissionId;
       const series = getSeriesFromStyleNumber(styleNo);
-      
+
+      // Final check for submissionId if we don't have one (e.g. user ignored the toast)
+      if (!submissionId) {
+        const { data: existingSub } = await supabase
+          .from('submissions')
+          .select('id')
+          .eq('style_number', styleNo.trim())
+          .eq('series', series || 'General')
+          .maybeSingle();
+        
+        if (existingSub) {
+          submissionId = existingSub.id;
+        } else {
+          submissionId = uuidv4();
+        }
+      }
+
       // Determine the base URL for links
       let appBaseUrl = window.location.origin;
       const envAppUrl = import.meta.env.VITE_APP_URL;
@@ -356,12 +414,16 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       const userName = user.displayName || userEmail;
 
       const assignmentsWithLinks = validAssignments.map(a => {
-        const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=1`;
-        const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=2`;
-        const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=3`;
-        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=4`;
-        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${a.id}&round=5`;
-        return { ...a, r1Link, r2Link, r3Link, r4Link, r5Link };
+        // Ensure the ID is deterministic based on current submission and model email
+        // This forces merging in the database and Google Sheets
+        const finalAId = getDeterministicId(submissionId!, a.modelEmail);
+        
+        const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=1`;
+        const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=2`;
+        const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=3`;
+        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=4`;
+        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=5`;
+        return { ...a, id: finalAId, r1Link, r2Link, r3Link, r4Link, r5Link };
       });
 
       // 1. Supabase Submission

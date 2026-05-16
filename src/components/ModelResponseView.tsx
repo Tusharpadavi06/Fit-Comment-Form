@@ -228,19 +228,15 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       setGivenForFitDate(assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date);
     }
 
-    // 3. Round-specific prefills (Round 2 or 3)
+    // 3. Round-specific prefills (Round 2 or 3) - REMOVED per user request to keep form blank for new rounds
+    // Only pre-fill Color and Given for Fit Date as they are essential starting points
     const roundNumVal = parseInt(round) || 1;
     if (roundNumVal > 1) {
       const prevRoundNum = roundNumVal - 1;
       const dataValue = assignmentData[`round${prevRoundNum}`] || assignmentData[`round_${prevRoundNum}`];
       
       if (dataValue) {
-        console.log(`Pre-filling from Round ${prevRoundNum} data`, dataValue);
-        if (dataValue.before_wash || dataValue.beforeWash) setBeforeWash(dataValue.before_wash || dataValue.beforeWash);
-        if (dataValue.after_wash || dataValue.afterWash) setAfterWash(dataValue.after_wash || dataValue.afterWash);
-        if (dataValue.fabric_trims || dataValue.fabricTrims || dataValue.fabricComments) {
-          setFabricTrims(dataValue.fabric_trims || dataValue.fabricTrims || dataValue.fabricComments);
-        }
+        // Keep these as they are usually consistent
         if (dataValue.given_for_fit_date || dataValue.givenForFitDate) {
           setGivenForFitDate(dataValue.given_for_fit_date || dataValue.givenForFitDate);
         }
@@ -250,6 +246,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         if (dataValue.comments_received_date || dataValue.commentsReceivedDate) {
           setCommentsReceivedDate(dataValue.comments_received_date || dataValue.commentsReceivedDate);
         }
+        // Feedback questions (before wash, after wash, fabric) are intentionally LEFT BLANK 
+        // as per user request: "round 2 k liye jo Response Form me jo qusetions he wo blank ho"
       }
     }
   }, [assignmentData, round]);
@@ -457,11 +455,13 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
          console.log("Feedback successfully synced to Google Sheets");
       }
 
-      // Automate email for next round if responding to Round 1, 2, 3, or 4
+      // AUTOMATIC EMAIL TRIGGER REMOVED per user request
+      // Admin will send next round link manually from the fit history / admin panel
+      /*
       if (parseInt(round) < 5) {
-        console.log("Automatically sending next round link via email...");
-        handleSendNextRoundLink();
+        console.log("Next round notification is now manual via Fit History.");
       }
+      */
 
     } catch (error: any) {
       console.error("Submission error:", error);

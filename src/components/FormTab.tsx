@@ -59,6 +59,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   const [existingSubmissionId, setExistingSubmissionId] = useState<string | null>(null);
   const [user, setUser] = useState<any>(null);
   const [deletedAssignmentIds, setDeletedAssignmentIds] = useState<string[]>([]);
+  const [showConfirmClear, setShowConfirmClear] = useState(false);
 
   const getDeterministicId = (subId: string, email: string) => {
     if (!subId || !email) return uuidv4();
@@ -1153,24 +1154,50 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         {/* Action Buttons */}
         <div className="flex justify-between items-center pt-8 px-1 overflow-hidden">
           {!editMode ? (
-            <Button 
-              type="button" 
-              variant="ghost" 
-              onClick={() => {
-                if (confirm('Are you sure you want to clear the form?')) {
-                  setTypeOfSample('');
-                  setStyleNo('');
-                  setDescription('');
-                  setSharedColor('');
-                  setSharedSize('');
-                  setSharedFitDate(new Date().toLocaleDateString('en-GB'));
-                  setAssignments([]);
-                }
-              }}
-              className="text-slate-500 hover:text-slate-700 hover:bg-slate-100/50"
-            >
-              Clear form
-            </Button>
+            showConfirmClear ? (
+              <div className="flex items-center gap-2">
+                <Button 
+                  type="button" 
+                  variant="destructive" 
+                  size="sm"
+                  onClick={() => {
+                    setTypeOfSample('');
+                    setStyleNo('');
+                    setDescription('');
+                    setSharedColor('');
+                    setSharedSize('');
+                    setSharedFitDate(new Date().toLocaleDateString('en-GB'));
+                    setAssignments([]);
+                    setShowConfirmClear(false);
+                  }}
+                  className="h-9 px-3 text-xs"
+                >
+                  Confirm Clear
+                </Button>
+                <Button 
+                  type="button" 
+                  variant="ghost" 
+                  size="sm"
+                  onClick={() => setShowConfirmClear(false)}
+                  className="h-9 px-3 text-xs text-slate-500 hover:text-slate-700"
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <Button 
+                type="button" 
+                variant="ghost" 
+                onClick={() => {
+                  setShowConfirmClear(true);
+                  // Auto reset after 4s
+                  setTimeout(() => setShowConfirmClear(false), 4000);
+                }}
+                className="text-slate-500 hover:text-slate-700 hover:bg-slate-100/50"
+              >
+                Clear form
+              </Button>
+            )
           ) : <div />}
 
           <Button type="submit" size="lg" className="px-8 h-10 font-medium" disabled={submitting}>

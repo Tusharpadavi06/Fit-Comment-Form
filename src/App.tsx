@@ -38,13 +38,22 @@ export default function App() {
   };
 
   // Fetch model pool once at app level with local cache
-  const fetchModelPool = async () => {
+  const fetchModelPool = async (updatedData?: any[]) => {
+    if (updatedData && Array.isArray(updatedData)) {
+      setModelPool(updatedData);
+      localStorage.setItem('model_pool_cache', JSON.stringify(updatedData));
+      setLoadingModels(false);
+      return;
+    }
+
     try {
-      // Check cache first
-      const cached = localStorage.getItem('model_pool_cache');
-      if (cached) {
-        setModelPool(JSON.parse(cached));
-        setLoadingModels(false);
+      // Check cache first (only on initial load if modelPool is empty)
+      if (modelPool.length === 0) {
+        const cached = localStorage.getItem('model_pool_cache');
+        if (cached) {
+          setModelPool(JSON.parse(cached));
+          setLoadingModels(false);
+        }
       }
 
       const { data, error } = await supabase

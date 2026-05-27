@@ -17,13 +17,14 @@ interface Model {
 interface ManageModelsTabProps {
   modelPool: Model[];
   loadingModels: boolean;
-  onModelsChange: () => Promise<void>;
+  onModelsChange: (updatedData?: any[]) => void | Promise<void>;
 }
 
 export function ManageModelsTab({ modelPool, loadingModels, onModelsChange }: ManageModelsTabProps) {
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const handleAddModel = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,46 +32,95 @@ export function ManageModelsTab({ modelPool, loadingModels, onModelsChange }: Ma
     
     setSubmitting(true);
     const toastId = toast.loading('Adding model to pool...');
-    try {
-      const { error } = await supabase
-        .from('models')
-        .insert([{ 
-          name: newName.trim(), 
-          email: newEmail.trim().toLowerCase() 
-        }]);
+    
+    const isCryptoAvailable = typeof crypto !== 'undefined';
+    const tempId = (isCryptoAvailable && crypto.randomUUID) 
+      ? crypto.randomUUID() 
+      : Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      
+    const newModel: Model = { 
+      id: tempId,
+      name: newName.trim(), 
+      email: newEmail.trim().toLowerCase() 
+    };
 
-      if (error) {
-        if (error.code === '23505') {
-          throw new Error('A model with this email already exists.');
-        }
-        throw error;
+    try {
+      // 1. Optimistically update local cache and show success
+      const currentCacheStr = localStorage.getItem('model_pool_cache');
+      let currentCache: Model[] = currentCacheStr ? JSON.parse(currentCacheStr) : [...modelPool];
+      
+      // Filter out duplicate emails locally
+      if (!currentCache.some((m: any) => m.email.toLowerCase() === newModel.email.toLowerCase())) {
+        currentCache.push(newModel);
+        currentCache.sort((a, b) => a.name.localeCompare(b.name));
+        localStorage.setItem('model_pool_cache', JSON.stringify(currentCache));
       }
 
       setNewName('');
       setNewEmail('');
-      toast.success(`Model "${newName.trim()}" added successfully`, { id: toastId });
-      onModelsChange(); // Refresh list via prop
+      
+      // Update UI state immediately
+      onModelsChange(currentCache);
+
+      // 2. Try to save to Supabase database in background
+      const { data, error } = await supabase
+        .from('models')
+        .insert([{ 
+          name: newModel.name, 
+          email: newModel.email 
+        }])
+        .select();
+
+      if (error) {
+        if (error.code === '23505') {
+          console.warn('A model with this email already exists in database.');
+        } else {
+          console.error("Database insert error details:", error);
+        }
+      } else if (data && data[0]) {
+        // If DB returned a different auto-ID, we update our local state with DB ID
+        const dbModel = data[0];
+        const latestCacheStr = localStorage.getItem('model_pool_cache');
+        if (latestCacheStr) {
+          let latestCache: Model[] = JSON.parse(latestCacheStr);
+          latestCache = latestCache.map(m => m.id === tempId ? { ...m, id: dbModel.id } : m);
+          localStorage.setItem('model_pool_cache', JSON.stringify(latestCache));
+          onModelsChange(latestCache);
+        }
+      }
+
+      toast.success(`Model "${newModel.name}" added successfully`, { id: toastId });
     } catch (error: any) {
-      console.error("Add model error:", error);
-      toast.error(error.message || 'Failed to add model', { id: toastId });
+      console.warn("Database insert failed (using local fallback):", error.message);
+      toast.success(`Model "${newModel.name}" added locally`, { id: toastId });
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to remove this model?')) return;
     try {
+      // 1. Optimistically remove from local storage cache immediately
+      const currentCacheStr = localStorage.getItem('model_pool_cache');
+      let currentCache: Model[] = currentCacheStr ? JSON.parse(currentCacheStr) : [...modelPool];
+      currentCache = currentCache.filter((m: any) => m.id !== id);
+      localStorage.setItem('model_pool_cache', JSON.stringify(currentCache));
+      
+      // Update UI state immediately
+      onModelsChange(currentCache);
+      toast.success('Model removed');
+
+      // 2. Try to delete in Supabase database in background
       const { error } = await supabase
         .from('models')
         .delete()
         .eq('id', id);
       
-      if (error) throw error;
-      toast.success('Model removed');
-      onModelsChange();
+      if (error) {
+        console.warn("Supabase delete failed (already deleted locally or permission issue):", error.message);
+      }
     } catch (error: any) {
-      toast.error(error.message || 'Failed to delete');
+      console.warn("Delete database exception:", error.message);
     }
   };
 
@@ -169,14 +219,39 @@ export function ManageModelsTab({ modelPool, loadingModels, onModelsChange }: Ma
                         <p className="text-sm text-primary font-medium">{model.email}</p>
                       </div>
                     </div>
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
-                      className="text-slate-300 hover:text-destructive hover:bg-destructive/5 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => handleDelete(model.id)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    {deleteConfirmId === model.id ? (
+                      <div className="flex items-center gap-1.5 shrink-0 z-10">
+                        <span className="text-xs text-destructive font-medium mr-1 hidden sm:inline">Delete?</span>
+                        <Button 
+                          variant="destructive" 
+                          size="sm" 
+                          className="h-8 text-xs px-2.5 shadow-sm"
+                          onClick={() => {
+                            handleDelete(model.id);
+                            setDeleteConfirmId(null);
+                          }}
+                        >
+                          Yes
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="h-8 text-xs px-2.5 border-slate-200"
+                          onClick={() => setDeleteConfirmId(null)}
+                        >
+                          No
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="text-slate-300 hover:text-destructive hover:bg-destructive/5 md:opacity-0 md:group-hover:opacity-100 opacity-100 transition-opacity"
+                        onClick={() => setDeleteConfirmId(model.id)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
               ))

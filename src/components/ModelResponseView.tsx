@@ -212,34 +212,48 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       }
     }
     
-    // 2. Given for Fit Date
-    if (assignmentData.given_for_fit_date) {
-      setGivenForFitDate(assignmentData.given_for_fit_date);
-    } else {
-      for (const key of currentRoundKeys) {
-        if (assignmentData[key]?.given_for_fit_date) {
-          setGivenForFitDate(assignmentData[key].given_for_fit_date);
-        }
+    // 2. Given for Fit Date (determine correct date per round)
+    let resolvedFitDate = '';
+    
+    // Priority 1: Current specific round's given_for_fit_date
+    for (const key of currentRoundKeys) {
+      if (assignmentData[key]?.given_for_fit_date) {
+        resolvedFitDate = assignmentData[key].given_for_fit_date;
+        break;
       }
     }
     
-    // Fallback to Round 1 given date if still empty
-    if (!givenForFitDate && (assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date)) {
-      setGivenForFitDate(assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date);
+    // Priority 2: Root level given_for_fit_date (which matches active round date from admin form)
+    if (!resolvedFitDate && assignmentData.given_for_fit_date) {
+      resolvedFitDate = assignmentData.given_for_fit_date;
+    }
+    
+    // Priority 3: Fallback helper - previous round's given_for_fit_date
+    const roundNumVal = parseInt(round) || 1;
+    if (!resolvedFitDate && roundNumVal > 1) {
+      const prevRoundNum = roundNumVal - 1;
+      const prevData = assignmentData[`round${prevRoundNum}`] || assignmentData[`round_${prevRoundNum}`];
+      if (prevData?.given_for_fit_date) {
+        resolvedFitDate = prevData.given_for_fit_date;
+      }
+    }
+    
+    // Priority 4: Final fallback - Round 1 given date
+    if (!resolvedFitDate) {
+      resolvedFitDate = assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date || '';
+    }
+    
+    if (resolvedFitDate) {
+      setGivenForFitDate(resolvedFitDate);
     }
 
     // 3. Round-specific prefills (Round 2 or 3) - REMOVED per user request to keep form blank for new rounds
-    // Only pre-fill Color and Given for Fit Date as they are essential starting points
-    const roundNumVal = parseInt(round) || 1;
+    // Only pre-fill Color/essential starting points as they are usually consistent
     if (roundNumVal > 1) {
       const prevRoundNum = roundNumVal - 1;
       const dataValue = assignmentData[`round${prevRoundNum}`] || assignmentData[`round_${prevRoundNum}`];
       
       if (dataValue) {
-        // Keep these as they are usually consistent
-        if (dataValue.given_for_fit_date || dataValue.givenForFitDate) {
-          setGivenForFitDate(dataValue.given_for_fit_date || dataValue.givenForFitDate);
-        }
         if (dataValue.received_date || dataValue.receivedDate) {
           setReceivedDate(dataValue.received_date || dataValue.receivedDate);
         }

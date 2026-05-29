@@ -471,7 +471,15 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       });
 
       // 2. Supabase Assignments
-      const assPayload = assignmentsWithLinks.map(a => ({
+      const assPayload = assignmentsWithLinks.map(a => {
+        // Dynamic assignment round specific updates during admin submission
+        const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round1Data;
+        const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round2Data;
+        const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round3Data;
+        const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round4Data;
+        const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round5Data;
+
+        return {
           id: a.id,
           submission_id: submissionId,
           model_id: a.modelId,
@@ -484,13 +492,15 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           r3_link: a.r3Link,
           r4_link: a.r4Link,
           r5_link: a.r5Link,
-          // Preserve existing feedback data if we have it in state
-          round1: a.round1Data || null,
-          round2: a.round2Data || null,
-          round3: a.round3Data || null,
-          round4: a.round4Data || null,
-          round5: a.round5Data || null
-      }));
+          given_for_fit_date: a.givenForFitDate,
+          // Preserve and update feedback data per round
+          round1: r1 || null,
+          round2: r2 || null,
+          round3: r3 || null,
+          round4: r4 || null,
+          round5: r5 || null
+        };
+      });
 
       const { error: assError } = await supabase.from('assignments').upsert(assPayload);
       
@@ -512,6 +522,12 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       // 2b. Firestore Assignments (Critical for ModelResponseView)
       safeFirestoreWrite(async () => {
         for (const a of assignmentsWithLinks) {
+          const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round1Data;
+          const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round2Data;
+          const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round3Data;
+          const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round4Data;
+          const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round5Data;
+
           await setDoc(doc(db, 'assignments', a.id), {
             id: a.id,
             submission_id: submissionId,
@@ -526,6 +542,11 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             r3_link: a.r3Link,
             r4_link: a.r4Link,
             r5_link: a.r5Link,
+            round1: r1 || null,
+            round2: r2 || null,
+            round3: r3 || null,
+            round4: r4 || null,
+            round5: r5 || null,
             last_updated: serverTimestamp()
           }, { merge: true });
         }

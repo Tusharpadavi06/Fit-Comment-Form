@@ -624,7 +624,11 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         setAssignments([]);
       }
 
-      if (!allSuccess) throw new Error("Some records failed to sync to Google Sheets. Please verify your script URL.");
+      if (!allSuccess) {
+        return editMode 
+          ? `Round ${currentRound} Updated (But Google Sheets failed to sync - check settings)` 
+          : "Form Submitted successfully! (But Google Sheets failed to sync - check settings)";
+      }
       
       return editMode ? `Round ${currentRound} Updated!` : "Form Submitted successfully!";
     })();

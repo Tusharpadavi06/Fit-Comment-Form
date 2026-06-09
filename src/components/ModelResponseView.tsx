@@ -13,6 +13,54 @@ import { toast } from 'sonner';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
 import { getSeriesFromStyleNumber } from '../lib/series-utils';
 
+// Helper to convert DD/MM/YYYY to YYYY-MM-DD for native HTML date controls
+const ddmmyyyyToYyyymmdd = (dateStr: string): string => {
+  if (!dateStr) return '';
+  const cleanStr = String(dateStr).trim().toLowerCase();
+  if (cleanStr === '' || cleanStr === 'null' || cleanStr === 'undefined' || cleanStr.includes('nan')) return '';
+  
+  const parts = dateStr.split('/');
+  if (parts.length === 3) {
+    const day = parts[0].padStart(2, '0');
+    const month = parts[1].padStart(2, '0');
+    const year = parts[2];
+    if (isNaN(Number(day)) || isNaN(Number(month)) || isNaN(Number(year))) {
+      return '';
+    }
+    return `${year}-${month}-${day}`;
+  }
+  
+  // Try parsing ISO or other standard date string
+  const t = Date.parse(dateStr);
+  if (!isNaN(t)) {
+    const d = new Date(t);
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${year}-${month}-${day}`;
+  }
+  return '';
+};
+
+// Helper to convert YYYY-MM-DD back to DD/MM/YYYY for storing in database and sheets
+const yyyymmddToDdmmyyyy = (dateStr: string): string => {
+  if (!dateStr) return '';
+  const cleanStr = String(dateStr).trim().toLowerCase();
+  if (cleanStr === '' || cleanStr === 'null' || cleanStr === 'undefined' || cleanStr.includes('nan')) return '';
+  
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    const year = parts[0];
+    const month = parts[1];
+    const day = parts[2];
+    if (isNaN(Number(day)) || isNaN(Number(month)) || isNaN(Number(year))) {
+      return '';
+    }
+    return `${day}/${month}/${year}`;
+  }
+  return '';
+};
+
 interface ModelResponseViewProps {
   submissionId: string;
   assignmentId: string;
@@ -29,9 +77,9 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const [error, setError] = useState<string | null>(null);
 
   // Form states
-  const [receivedDate, setReceivedDate] = useState(new Date().toLocaleDateString('en-GB'));
-  const [commentsReceivedDate, setCommentsReceivedDate] = useState(new Date().toLocaleDateString('en-GB'));
-  const [givenForFitDate, setGivenForFitDate] = useState(new Date().toLocaleDateString('en-GB'));
+  const [receivedDate, setReceivedDate] = useState('');
+  const [commentsReceivedDate, setCommentsReceivedDate] = useState('');
+  const [givenForFitDate, setGivenForFitDate] = useState('');
   const [beforeWash, setBeforeWash] = useState('');
   const [afterWash, setAfterWash] = useState('');
   const [fabricTrims, setFabricTrims] = useState('');
@@ -177,6 +225,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         if (assData) {
           assData.model_name = assData.model_name || assData.modelName;
           assData.model_email = assData.model_email || assData.modelEmail;
+          assData.given_for_fit_date = assData.given_for_fit_date || assData.givenForFitDate || '';
           setAssignmentData(assData);
         }
 
@@ -245,25 +294,42 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
     
     if (resolvedFitDate) {
       setGivenForFitDate(resolvedFitDate);
+    } else {
+      // If we still can't resolve it, fall back to assignment root level or submission dates
+      const fallbackDate = assignmentData.given_for_fit_date || 
+                           assignmentData.givenForFitDate || 
+                           (submissionData?.created_at ? new Date(submissionData.created_at).toLocaleDateString('en-GB') : '') ||
+                           (submissionData?.updatedAt ? new Date(submissionData.updatedAt.seconds * 1000).toLocaleDateString('en-GB') : '');
+      setGivenForFitDate(fallbackDate);
     }
 
-    // 3. Round-specific prefills (Round 2 or 3) - REMOVED per user request to keep form blank for new rounds
-    // Only pre-fill Color/essential starting points as they are usually consistent
-    if (roundNumVal > 1) {
-      const prevRoundNum = roundNumVal - 1;
-      const dataValue = assignmentData[`round${prevRoundNum}`] || assignmentData[`round_${prevRoundNum}`];
-      
-      if (dataValue) {
-        if (dataValue.received_date || dataValue.receivedDate) {
-          setReceivedDate(dataValue.received_date || dataValue.receivedDate);
+    // 3. Current active round saved data pre-fill (if already submitted/saved previously in this round)
+    let loadedReceivedDate = '';
+    let loadedCommentsDate = '';
+    
+    for (const key of currentRoundKeys) {
+      if (assignmentData[key]) {
+        const roundData = assignmentData[key];
+        if (roundData.received_date || roundData.receivedDate || roundData.fit_date) {
+          loadedReceivedDate = roundData.received_date || roundData.receivedDate || roundData.fit_date || '';
         }
-        if (dataValue.comments_received_date || dataValue.commentsReceivedDate) {
-          setCommentsReceivedDate(dataValue.comments_received_date || dataValue.commentsReceivedDate);
+        if (roundData.comments_received_date || roundData.commentsReceivedDate) {
+          loadedCommentsDate = roundData.comments_received_date || roundData.commentsReceivedDate || '';
         }
-        // Feedback questions (before wash, after wash, fabric) are intentionally LEFT BLANK 
-        // as per user request: "round 2 k liye jo Response Form me jo qusetions he wo blank ho"
+        if (roundData.before_wash || roundData.beforeWash) {
+          setBeforeWash(roundData.before_wash || roundData.beforeWash);
+        }
+        if (roundData.after_wash || roundData.afterWash) {
+          setAfterWash(roundData.after_wash || roundData.afterWash);
+        }
+        if (roundData.fabric_trims || roundData.fabricTrims) {
+          setFabricTrims(roundData.fabric_trims || roundData.fabricTrims);
+        }
       }
     }
+    
+    setReceivedDate(ddmmyyyyToYyyymmdd(loadedReceivedDate));
+    setCommentsReceivedDate(ddmmyyyyToYyyymmdd(loadedCommentsDate));
   }, [assignmentData, round]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -291,8 +357,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         await updateDoc(doc(db, 'assignments', aId), {
           [fbRoundKey]: {
             given_for_fit_date: givenForFitDate,
-            received_date: receivedDate,
-            comments_received_date: commentsReceivedDate,
+            received_date: yyyymmddToDdmmyyyy(receivedDate),
+            comments_received_date: yyyymmddToDdmmyyyy(commentsReceivedDate),
             before_wash: beforeWash,
             after_wash: afterWash,
             fabric_trims: fabricTrims,
@@ -308,9 +374,9 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         if (assignmentId) {
           const supabaseRoundKey = `round${round}`; // round1, round2, round3
           const roundData = {
-            fit_date: receivedDate,
+            fit_date: yyyymmddToDdmmyyyy(receivedDate),
             given_for_fit_date: givenForFitDate,
-            comments_received_date: commentsReceivedDate,
+            comments_received_date: yyyymmddToDdmmyyyy(commentsReceivedDate),
             before_wash: beforeWash,
             after_wash: afterWash,
             fabric_trims: fabricTrims,
@@ -384,11 +450,11 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         round: String(round),
         color: color || assignmentData.color || "",
         givenForFitDate: givenForFitDate,
-        receivedDate: receivedDate,
-        received_date: receivedDate,
-        commentsDate: commentsReceivedDate,
-        commentsReceivedDate: commentsReceivedDate,
-        comments_received_date: commentsReceivedDate,
+        receivedDate: yyyymmddToDdmmyyyy(receivedDate),
+        received_date: yyyymmddToDdmmyyyy(receivedDate),
+        commentsDate: yyyymmddToDdmmyyyy(commentsReceivedDate),
+        commentsReceivedDate: yyyymmddToDdmmyyyy(commentsReceivedDate),
+        comments_received_date: yyyymmddToDdmmyyyy(commentsReceivedDate),
         beforeWash: beforeWash,
         before_wash: beforeWash,
         afterWash: afterWash,
@@ -401,8 +467,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 1 (G-M)
         "G": round === "1" ? (color || assignmentData.color || "") : (assignmentData.round1?.color || assignmentData.round_1?.color || ""),
         "H": round === "1" ? (givenForFitDate || "") : (assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date || ""),
-        "I": round === "1" ? (commentsReceivedDate || "") : (assignmentData.round1?.comments_received_date || assignmentData.round_1?.comments_received_date || ""),
-        "J": round === "1" ? (receivedDate || "") : (assignmentData.round1?.received_date || assignmentData.round_1?.received_date || ""),
+        "I": round === "1" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round1?.comments_received_date || assignmentData.round_1?.comments_received_date || ""),
+        "J": round === "1" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round1?.received_date || assignmentData.round_1?.received_date || ""),
         "K": round === "1" ? (beforeWash || "") : (assignmentData.round1?.before_wash || assignmentData.round_1?.before_wash || ""),
         "L": round === "1" ? (afterWash || "") : (assignmentData.round1?.after_wash || assignmentData.round_1?.after_wash || ""),
         "M": round === "1" ? (fabricTrims || "") : (assignmentData.round1?.fabric_trims || assignmentData.round_1?.fabric_trims || ""),
@@ -410,8 +476,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 2 (O-U)
         "O": round === "2" ? (color || assignmentData.color || "") : (assignmentData.round2?.color || assignmentData.round_2?.color || ""),
         "P": round === "2" ? (givenForFitDate || "") : (assignmentData.round2?.given_for_fit_date || assignmentData.round_2?.given_for_fit_date || ""),
-        "Q": round === "2" ? (commentsReceivedDate || "") : (assignmentData.round2?.comments_received_date || assignmentData.round_2?.comments_received_date || ""),
-        "R": round === "2" ? (receivedDate || "") : (assignmentData.round2?.received_date || assignmentData.round_2?.received_date || ""),
+        "Q": round === "2" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round2?.comments_received_date || assignmentData.round_2?.comments_received_date || ""),
+        "R": round === "2" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round2?.received_date || assignmentData.round_2?.received_date || ""),
         "S": round === "2" ? (beforeWash || "") : (assignmentData.round2?.before_wash || assignmentData.round_2?.before_wash || ""),
         "T": round === "2" ? (afterWash || "") : (assignmentData.round2?.after_wash || assignmentData.round_2?.after_wash || ""),
         "U": round === "2" ? (fabricTrims || "") : (assignmentData.round2?.fabric_trims || assignmentData.round_2?.fabric_trims || ""),
@@ -419,8 +485,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 3 (W-AC)
         "W": round === "3" ? (color || assignmentData.color || "") : (assignmentData.round3?.color || assignmentData.round_3?.color || ""),
         "X": round === "3" ? (givenForFitDate || "") : (assignmentData.round3?.given_for_fit_date || assignmentData.round_3?.given_for_fit_date || ""),
-        "Y": round === "3" ? (commentsReceivedDate || "") : (assignmentData.round3?.comments_received_date || assignmentData.round_3?.comments_received_date || ""),
-        "Z": round === "3" ? (receivedDate || "") : (assignmentData.round3?.received_date || assignmentData.round_3?.received_date || ""),
+        "Y": round === "3" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round3?.comments_received_date || assignmentData.round_3?.comments_received_date || ""),
+        "Z": round === "3" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round3?.received_date || assignmentData.round_3?.received_date || ""),
         "AA": round === "3" ? (beforeWash || "") : (assignmentData.round3?.before_wash || assignmentData.round_3?.before_wash || ""),
         "AB": round === "3" ? (afterWash || "") : (assignmentData.round3?.after_wash || assignmentData.round_3?.after_wash || ""),
         "AC": round === "3" ? (fabricTrims || "") : (assignmentData.round3?.fabric_trims || assignmentData.round_3?.fabric_trims || ""),
@@ -428,8 +494,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 4 (AE-AK)
         "AE": round === "4" ? (color || assignmentData.color || "") : (assignmentData.round4?.color || (assignmentData.round_4?.color || "")),
         "AF": round === "4" ? (givenForFitDate || "") : (assignmentData.round4?.given_for_fit_date || (assignmentData.round_4?.given_for_fit_date || "")),
-        "AG": round === "4" ? (commentsReceivedDate || "") : (assignmentData.round4?.comments_received_date || (assignmentData.round_4?.comments_received_date || "")),
-        "AH": round === "4" ? (receivedDate || "") : (assignmentData.round4?.received_date || (assignmentData.round_4?.received_date || "")),
+        "AG": round === "4" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round4?.comments_received_date || (assignmentData.round_4?.comments_received_date || "")),
+        "AH": round === "4" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round4?.received_date || (assignmentData.round_4?.received_date || "")),
         "AI": round === "4" ? (beforeWash || "") : (assignmentData.round4?.before_wash || (assignmentData.round_4?.before_wash || "")),
         "AJ": round === "4" ? (afterWash || "") : (assignmentData.round4?.after_wash || (assignmentData.round_4?.after_wash || "")),
         "AK": round === "4" ? (fabricTrims || "") : (assignmentData.round4?.fabric_trims || (assignmentData.round_4?.fabric_trims || "")),
@@ -437,8 +503,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 5 (AM-AS)
         "AM": round === "5" ? (color || assignmentData.color || "") : (assignmentData.round5?.color || (assignmentData.round_5?.color || "")),
         "AN": round === "5" ? (givenForFitDate || "") : (assignmentData.round5?.given_for_fit_date || (assignmentData.round_5?.given_for_fit_date || "")),
-        "AO": round === "5" ? (commentsReceivedDate || "") : (assignmentData.round5?.comments_received_date || (assignmentData.round_5?.comments_received_date || "")),
-        "AP": round === "5" ? (receivedDate || "") : (assignmentData.round5?.received_date || (assignmentData.round_5?.received_date || "")),
+        "AO": round === "5" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round5?.comments_received_date || (assignmentData.round_5?.comments_received_date || "")),
+        "AP": round === "5" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round5?.received_date || (assignmentData.round_5?.received_date || "")),
         "AQ": round === "5" ? (beforeWash || "") : (assignmentData.round5?.before_wash || (assignmentData.round_5?.before_wash || "")),
         "AR": round === "5" ? (afterWash || "") : (assignmentData.round5?.after_wash || (assignmentData.round_5?.after_wash || "")),
         "AS": round === "5" ? (fabricTrims || "") : (assignmentData.round5?.fabric_trims || (assignmentData.round_5?.fabric_trims || "")),
@@ -453,7 +519,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         "Size": assignmentData.size || "",
         "Color": color || assignmentData.color || "",
         "Round": String(round),
-        "Date Sent": submissionData.created_at ? new Date(submissionData.created_at).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB'),
+        "Date Sent": (givenForFitDate || assignmentData?.given_for_fit_date || assignmentData?.givenForFitDate) || (submissionData?.created_at ? new Date(submissionData.created_at).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB')),
         "Instructions": submissionData.description || "",
         "Round 2 Edit Link": adminEditR2Link,
         "Round 3 Edit Link": adminEditR3Link,
@@ -561,6 +627,13 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       </div>
     );
   }
+
+  const dateSentFormatted = givenForFitDate || 
+    assignmentData?.given_for_fit_date || 
+    assignmentData?.givenForFitDate || 
+    (submissionData?.created_at ? new Date(submissionData.created_at).toLocaleDateString('en-GB') : '') ||
+    (submissionData?.updatedAt ? new Date(submissionData.updatedAt.seconds * 1000).toLocaleDateString('en-GB') : '') ||
+    '-';
 
   if (loading) {
     return (
@@ -685,8 +758,12 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
               <p className="font-medium text-sm text-slate-900">{assignmentData.color}</p>
             </div>
             <div className="space-y-1">
+              <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Sample Given for Fit Date</span>
+              <p className="font-medium text-sm text-slate-900">{givenForFitDate || '-'}</p>
+            </div>
+            <div className="space-y-1">
               <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Date Sent</span>
-              <p className="font-medium text-sm text-slate-900">{submissionData.created_at ? new Date(submissionData.created_at).toLocaleDateString('en-GB') : '-'}</p>
+              <p className="font-medium text-sm text-slate-900">{dateSentFormatted}</p>
             </div>
           </div>
           {submissionData.description && (
@@ -710,13 +787,13 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
               <div className="space-y-2 md:col-span-2">
                 <Label className="flex items-center gap-2 text-slate-700 font-bold">
                   <CalendarIcon className="w-4 h-4 text-primary" />
-                  Sample Given for Fit Date *
+                  Sample Given for Fit Date (Read-only) *
                 </Label>
                 <Input 
                   value={givenForFitDate}
-                  onChange={(e) => setGivenForFitDate(e.target.value)}
+                  readOnly
                   placeholder="DD/MM/YYYY"
-                  className="border-primary/20 focus:border-primary"
+                  className="border-primary/20 bg-slate-50 text-slate-500 cursor-not-allowed font-medium shadow-none focus-visible:ring-0"
                   required
                 />
               </div>
@@ -741,9 +818,10 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                   Sample Received Date *
                 </Label>
                 <Input 
+                  type="date"
                   value={receivedDate}
                   onChange={(e) => setReceivedDate(e.target.value)}
-                  placeholder="DD/MM/YYYY"
+                  className="border-primary/20 focus:border-primary"
                   required
                 />
               </div>
@@ -753,9 +831,10 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                   Comments Received Date *
                 </Label>
                 <Input 
+                  type="date"
                   value={commentsReceivedDate}
                   onChange={(e) => setCommentsReceivedDate(e.target.value)}
-                  placeholder="DD/MM/YYYY"
+                  className="border-primary/20 focus:border-primary"
                   required
                 />
               </div>

@@ -50,7 +50,6 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
   const [sharedColor, setSharedColor] = useState('');
   const [sharedSize, setSharedSize] = useState('');
-  const [sharedFitDate, setSharedFitDate] = useState(new Date().toLocaleDateString('en-GB'));
   const [submitting, setSubmitting] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
   const [lastSubmission, setLastSubmission] = useState<any>(null);
@@ -261,8 +260,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           if (round === '4') currentColor = r4.color || a.color || '';
           if (round === '5') currentColor = r5.color || a.color || '';
 
-          // Use current round date if available
-          let currentDate = a.given_for_fit_date || new Date().toLocaleDateString('en-GB');
+          // Use current round date if available, otherwise blank
+          let currentDate = a.given_for_fit_date || '';
           if (round === '1') currentDate = r1.given_for_fit_date || currentDate;
           if (round === '2') currentDate = r2.given_for_fit_date || currentDate;
           if (round === '3') currentDate = r3.given_for_fit_date || currentDate;
@@ -345,7 +344,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         modelEmail: model.email, 
         color: sharedColor, 
         size: sharedSize, 
-        givenForFitDate: sharedFitDate,
+        givenForFitDate: '',
         round1Data: {},
         round2Data: {},
         round3Data: {},
@@ -355,11 +354,11 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
 
       // If we are in edit mode, ensure the round data reflects current round
       if (editMode) {
-        if (currentRound === '1') newAssignment.round1Data = { color: sharedColor, given_for_fit_date: sharedFitDate };
-        if (currentRound === '2') newAssignment.round2Data = { color: sharedColor, given_for_fit_date: sharedFitDate };
-        if (currentRound === '3') newAssignment.round3Data = { color: sharedColor, given_for_fit_date: sharedFitDate };
-        if (currentRound === '4') newAssignment.round4Data = { color: sharedColor, given_for_fit_date: sharedFitDate };
-        if (currentRound === '5') newAssignment.round5Data = { color: sharedColor, given_for_fit_date: sharedFitDate };
+        if (currentRound === '1') newAssignment.round1Data = { color: sharedColor, given_for_fit_date: '' };
+        if (currentRound === '2') newAssignment.round2Data = { color: sharedColor, given_for_fit_date: '' };
+        if (currentRound === '3') newAssignment.round3Data = { color: sharedColor, given_for_fit_date: '' };
+        if (currentRound === '4') newAssignment.round4Data = { color: sharedColor, given_for_fit_date: '' };
+        if (currentRound === '5') newAssignment.round5Data = { color: sharedColor, given_for_fit_date: '' };
       }
 
       const emptyRowIndex = assignments.findIndex(a => !a.modelId);
@@ -473,27 +472,23 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       // 2. Supabase Assignments
       const assPayload = assignmentsWithLinks.map(a => {
         // Dynamic assignment round specific updates during admin submission
-        const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round1Data;
-        const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round2Data;
-        const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round3Data;
-        const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round4Data;
-        const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round5Data;
+        const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r1Link } : a.round1Data;
+        const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r2Link } : a.round2Data;
+        const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r3Link } : a.round3Data;
+        const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r4Link } : a.round4Data;
+        const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r5Link } : a.round5Data;
 
         return {
           id: a.id,
           submission_id: submissionId,
-          model_id: a.modelId,
+          model_id: a.modelId || null,
           model_name: a.modelName,
           model_email: a.modelEmail,
           color: a.color,
           size: a.size,
-          r1_link: a.r1Link,
-          r2_link: a.r2Link,
-          r3_link: a.r3Link,
-          r4_link: a.r4Link,
-          r5_link: a.r5Link,
-          given_for_fit_date: a.givenForFitDate,
-          // Preserve and update feedback data per round
+          r4_link: a.r4Link || null,
+          r5_link: a.r5Link || null,
+          // Preserve and update feedback data per round (including given_for_fit_date)
           round1: r1 || null,
           round2: r2 || null,
           round3: r3 || null,
@@ -505,16 +500,27 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       const { error: assError } = await supabase.from('assignments').upsert(assPayload);
       
       if (assError) {
-        console.warn("Supabase Assignments batch failed, trying absolute minimal fallback:", assError);
-        // Absolute minimal fallback - only core columns that likely exist
-        const minimalAss = assignmentsWithLinks.map(a => ({
+        console.warn("Supabase Assignments batch failed, trying fallback preserving rounds:", assError);
+        const minimalAss = assignmentsWithLinks.map(a => {
+          const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round1Data;
+          const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round2Data;
+          const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round3Data;
+          const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round4Data;
+          const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round5Data;
+          return {
             id: a.id,
             submission_id: submissionId,
             model_name: a.modelName,
             model_email: a.modelEmail,
             color: a.color,
-            size: a.size
-        }));
+            size: a.size,
+            round1: r1 || null,
+            round2: r2 || null,
+            round3: r3 || null,
+            round4: r4 || null,
+            round5: r5 || null
+          };
+        });
         const { error: minErr } = await supabase.from('assignments').upsert(minimalAss);
         if (minErr) console.error("Critical: Minimal Supabase fallback also failed:", minErr);
       }
@@ -591,6 +597,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           ...(currentRound === '1' ? { "G": a.color || "", "H": a.givenForFitDate || "" } : {}),
           ...(currentRound === '2' ? { "O": a.color || "", "P": a.givenForFitDate || "" } : {}),
           ...(currentRound === '3' ? { "W": a.color || "", "X": a.givenForFitDate || "" } : {}),
+          ...(currentRound === '4' ? { "AE": a.color || "", "AF": a.givenForFitDate || "" } : {}),
+          ...(currentRound === '5' ? { "AM": a.color || "", "AN": a.givenForFitDate || "" } : {}),
           link: currentLink,
           responseUrl: currentLink,
           tabName: series || "General",
@@ -620,7 +628,6 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         setDescription('');
         setSharedColor('');
         setSharedSize('');
-        setSharedFitDate(new Date().toLocaleDateString('en-GB'));
         setAssignments([]);
       }
 
@@ -833,7 +840,6 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                 setDescription('');
                 setSharedColor('');
                 setSharedSize('');
-                setSharedFitDate(new Date().toLocaleDateString('en-GB'));
                 setAssignments([]);
               }} className="text-amber-700 hover:bg-amber-100">Cancel</Button>
             </CardContent>
@@ -997,26 +1003,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                 </div>
               </CardHeader>
               <CardContent className="px-6 py-6 pt-6">
-                <div className="grid gap-6 md:grid-cols-3">
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Default Date</Label>
-                      <button 
-                        type="button" 
-                        onClick={() => setAssignments(prev => prev.map(a => ({ ...a, givenForFitDate: sharedFitDate })))}
-                        className="text-[9px] font-bold text-indigo-600 hover:underline"
-                      >
-                        Apply to All
-                      </button>
-                    </div>
-                    <Input 
-                      placeholder="DD/MM/YYYY" 
-                      value={sharedFitDate} 
-                      onChange={e => setSharedFitDate(e.target.value)}
-                      className="border-0 border-b border-indigo-200 rounded-none px-0 focus-visible:ring-0 shadow-none focus-visible:border-indigo-600 transition-all h-10 bg-transparent text-base font-medium"
-                    />
-                  </div>
-
+                <div className="grid gap-6 md:grid-cols-2">
                   <div className="space-y-2">
                     <div className="flex justify-between items-center">
                       <Label className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Default Color</Label>
@@ -1088,6 +1075,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                         <TableCell className="py-4">
                           <Input 
                             value={row.givenForFitDate} 
+                            placeholder="DD/MM/YYYY"
                             onChange={e => {
                               const newAss = assignments.map(a => a.id === row.id ? { ...a, givenForFitDate: e.target.value } : a);
                               setAssignments(newAss);
@@ -1191,7 +1179,6 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                     setDescription('');
                     setSharedColor('');
                     setSharedSize('');
-                    setSharedFitDate(new Date().toLocaleDateString('en-GB'));
                     setAssignments([]);
                     setShowConfirmClear(false);
                   }}

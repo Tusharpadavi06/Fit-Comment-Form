@@ -1,17 +1,34 @@
 import React, { useState, useEffect } from 'react';
 import { supabase, supabaseUrl, supabaseAnonKey } from '../lib/supabase';
 import { db, safeFirestoreWrite } from '../lib/firebase';
-import { doc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Badge } from './ui/badge';
-import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare } from 'lucide-react';
+import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare, UploadCloud, X, FileText, Paperclip } from 'lucide-react';
 import { toast } from 'sonner';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
 import { getSeriesFromStyleNumber } from '../lib/series-utils';
+
+// Helper for Today's date in YYYY-MM-DD format
+const getTodayYyyymmdd = (): string => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export interface AttachmentItem {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  dataUrl: string; // base64 representation
+}
 
 // Helper to convert DD/MM/YYYY to YYYY-MM-DD for native HTML date controls
 const ddmmyyyyToYyyymmdd = (dateStr: string): string => {
@@ -78,12 +95,14 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
 
   // Form states
   const [receivedDate, setReceivedDate] = useState('');
-  const [commentsReceivedDate, setCommentsReceivedDate] = useState('');
+  const [commentsReceivedDate, setCommentsReceivedDate] = useState(getTodayYyyymmdd());
   const [givenForFitDate, setGivenForFitDate] = useState('');
   const [beforeWash, setBeforeWash] = useState('');
   const [afterWash, setAfterWash] = useState('');
   const [fabricTrims, setFabricTrims] = useState('');
   const [color, setColor] = useState('');
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -135,6 +154,29 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           const d = assDoc.data();
           assData = { id: assDoc.id, ...d };
           console.log("Firestore assignment found");
+        }
+
+        // 1b. Fallback query in Firestore if exact ID didn't match
+        if (!assData && sId) {
+          try {
+            const assQ = query(collection(db, 'assignments'), where('submission_id', '==', sId));
+            const snap = await getDocs(assQ);
+            if (!snap.empty) {
+              const allAss = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+              const cleanAId = aId.toLowerCase();
+              assData = allAss.find((a: any) => 
+                a.id === aId || 
+                (a.model_email && cleanAId.includes(a.model_email.toLowerCase().split('@')[0])) ||
+                (a.model_name && cleanAId.includes(a.model_name.toLowerCase().replace(/\s/g, '')))
+              );
+              if (!assData && allAss.length === 1) {
+                assData = allAss[0];
+              }
+              if (assData) console.log("Firestore assignment found via fallback query");
+            }
+          } catch (e: any) {
+            console.warn("Firestore fallback query error:", e.message);
+          }
         }
       } catch (fe: any) {
         console.warn("Firestore fetch issue (handled):", fe.message);
@@ -292,16 +334,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       resolvedFitDate = assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date || '';
     }
     
-    if (resolvedFitDate) {
-      setGivenForFitDate(resolvedFitDate);
-    } else {
-      // If we still can't resolve it, fall back to assignment root level or submission dates
-      const fallbackDate = assignmentData.given_for_fit_date || 
-                           assignmentData.givenForFitDate || 
-                           (submissionData?.created_at ? new Date(submissionData.created_at).toLocaleDateString('en-GB') : '') ||
-                           (submissionData?.updatedAt ? new Date(submissionData.updatedAt.seconds * 1000).toLocaleDateString('en-GB') : '');
-      setGivenForFitDate(fallbackDate);
-    }
+    // Set resolved date directly - DO NOT fallback to today's date or created_at!
+    setGivenForFitDate(resolvedFitDate || '');
 
     // 3. Current active round saved data pre-fill (if already submitted/saved previously in this round)
     let loadedReceivedDate = '';
@@ -313,8 +347,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         if (roundData.received_date || roundData.receivedDate || roundData.fit_date) {
           loadedReceivedDate = roundData.received_date || roundData.receivedDate || roundData.fit_date || '';
         }
-        if (roundData.comments_received_date || roundData.commentsReceivedDate) {
-          loadedCommentsDate = roundData.comments_received_date || roundData.commentsReceivedDate || '';
+        if (roundData.comments_date || roundData.commentsDate || roundData.comments_received_date || roundData.commentsReceivedDate) {
+          loadedCommentsDate = roundData.comments_date || roundData.commentsDate || roundData.comments_received_date || roundData.commentsReceivedDate || '';
         }
         if (roundData.before_wash || roundData.beforeWash) {
           setBeforeWash(roundData.before_wash || roundData.beforeWash);
@@ -325,12 +359,121 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         if (roundData.fabric_trims || roundData.fabricTrims) {
           setFabricTrims(roundData.fabric_trims || roundData.fabricTrims);
         }
+        if (roundData.attachments && Array.isArray(roundData.attachments)) {
+          setAttachments(roundData.attachments);
+        }
       }
     }
     
     setReceivedDate(ddmmyyyyToYyyymmdd(loadedReceivedDate));
-    setCommentsReceivedDate(ddmmyyyyToYyyymmdd(loadedCommentsDate));
+    // Default to Today's date if no comments date has been previously saved
+    if (loadedCommentsDate) {
+      setCommentsReceivedDate(ddmmyyyyToYyyymmdd(loadedCommentsDate));
+    } else {
+      setCommentsReceivedDate(getTodayYyyymmdd());
+    }
   }, [assignmentData, round]);
+
+  const handleFileUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploadingFiles(true);
+    try {
+      const newItems: AttachmentItem[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.size > 10 * 1024 * 1024) {
+          toast.error(`File ${file.name} is too large (max 10MB)`);
+          continue;
+        }
+
+        if (file.type.startsWith('image/')) {
+          // Compress image using canvas for quick & lightweight upload
+          const item = await new Promise<AttachmentItem>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+              const img = new Image();
+              img.onload = () => {
+                const maxDim = 1200;
+                let width = img.width;
+                let height = img.height;
+                if (width > maxDim || height > maxDim) {
+                  if (width > height) {
+                    height = Math.round((height * maxDim) / width);
+                    width = maxDim;
+                  } else {
+                    width = Math.round((width * maxDim) / height);
+                    height = maxDim;
+                  }
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                  ctx.drawImage(img, 0, 0, width, height);
+                  const compressed = canvas.toDataURL('image/jpeg', 0.75);
+                  resolve({
+                    id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+                    name: file.name,
+                    size: Math.round((compressed.length * 3) / 4),
+                    type: 'image/jpeg',
+                    dataUrl: compressed
+                  });
+                } else {
+                  resolve({
+                    id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+                    name: file.name,
+                    size: file.size,
+                    type: file.type,
+                    dataUrl: e.target?.result as string
+                  });
+                }
+              };
+              img.onerror = () => {
+                resolve({
+                  id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+                  name: file.name,
+                  size: file.size,
+                  type: file.type,
+                  dataUrl: e.target?.result as string
+                });
+              };
+              img.src = e.target?.result as string;
+            };
+            reader.readAsDataURL(file);
+          });
+          newItems.push(item);
+        } else {
+          // PDF or other documents
+          const item = await new Promise<AttachmentItem>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+              resolve({
+                id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                dataUrl: e.target?.result as string
+              });
+            };
+            reader.readAsDataURL(file);
+          });
+          newItems.push(item);
+        }
+      }
+      setAttachments(prev => [...prev, ...newItems]);
+      toast.success(`${newItems.length} file(s) attached`);
+    } catch (err) {
+      console.error("Error processing attachment files:", err);
+      toast.error("Failed to process one or more files.");
+    } finally {
+      setUploadingFiles(false);
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments(prev => prev.filter(a => a.id !== id));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -354,17 +497,22 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       // Firebase Save
       safeFirestoreWrite(async () => {
         const fbRoundKey = `round_${round}`;
+        const roundPayload = {
+          given_for_fit_date: givenForFitDate,
+          received_date: yyyymmddToDdmmyyyy(receivedDate),
+          comments_date: yyyymmddToDdmmyyyy(commentsReceivedDate),
+          comments_received_date: yyyymmddToDdmmyyyy(commentsReceivedDate),
+          before_wash: beforeWash,
+          after_wash: afterWash,
+          fabric_trims: fabricTrims,
+          color: color || assignmentData.color || assignmentData.modelColor,
+          attachments: attachments.map(a => ({ id: a.id, name: a.name, size: a.size, type: a.type, dataUrl: a.dataUrl })),
+          submitted_at: serverTimestamp()
+        };
+
         await updateDoc(doc(db, 'assignments', aId), {
-          [fbRoundKey]: {
-            given_for_fit_date: givenForFitDate,
-            received_date: yyyymmddToDdmmyyyy(receivedDate),
-            comments_received_date: yyyymmddToDdmmyyyy(commentsReceivedDate),
-            before_wash: beforeWash,
-            after_wash: afterWash,
-            fabric_trims: fabricTrims,
-            color: color || assignmentData.color || assignmentData.modelColor,
-            submitted_at: serverTimestamp()
-          },
+          [fbRoundKey]: roundPayload,
+          [`round${round}`]: roundPayload,
           last_updated: serverTimestamp()
         });
       });
@@ -376,11 +524,13 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           const roundData = {
             fit_date: yyyymmddToDdmmyyyy(receivedDate),
             given_for_fit_date: givenForFitDate,
+            comments_date: yyyymmddToDdmmyyyy(commentsReceivedDate),
             comments_received_date: yyyymmddToDdmmyyyy(commentsReceivedDate),
             before_wash: beforeWash,
             after_wash: afterWash,
             fabric_trims: fabricTrims,
             color: color || assignmentData.color || assignmentData.modelColor,
+            attachments: attachments.map(a => ({ id: a.id, name: a.name, size: a.size, type: a.type })),
             submitted_at: new Date().toISOString()
           };
           
@@ -392,8 +542,14 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
             .eq('id', assignmentId);
           
           if (updErr) {
-            console.error("Supabase Assignment Update Error:", updErr);
-            // Don't toast error to model unless it's critical, but log it
+            console.warn("Supabase Assignment Update Error (retrying without attachments):", updErr.message);
+            // In case the attachments column isn't present in Supabase table
+            const fallbackRoundData = { ...roundData };
+            delete (fallbackRoundData as any).attachments;
+            await supabase
+              .from('assignments')
+              .update({ [supabaseRoundKey]: fallbackRoundData })
+              .eq('id', assignmentId);
           } else {
             console.log("Supabase Assignment Update successful");
           }
@@ -462,6 +618,13 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         fabricComments: fabricTrims,
         fabricTrims: fabricTrims,
         fabric_trims: fabricTrims,
+        attachmentColumn: round === "1" ? "BI" : round === "2" ? "BJ" : round === "3" ? "BK" : round === "4" ? "BL" : "BM",
+        attachmentsCount: attachments.length,
+        attachments: attachments.map(a => ({ name: a.name, size: a.size, type: a.type })),
+        collageAttachment: attachments.find(a => a.type.startsWith('image/')) ? {
+          data: (attachments.find(a => a.type.startsWith('image/'))?.dataUrl || '').split(',')[1] || '',
+          name: attachments.find(a => a.type.startsWith('image/'))?.name || 'photo.jpg'
+        } : null,
         // Removed explicit link from N, V, AD as per user request
         
         // Round 1 (G-M)
@@ -761,10 +924,6 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
               <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Sample Given for Fit Date</span>
               <p className="font-medium text-sm text-slate-900">{givenForFitDate || '-'}</p>
             </div>
-            <div className="space-y-1">
-              <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Date Sent</span>
-              <p className="font-medium text-sm text-slate-900">{dateSentFormatted}</p>
-            </div>
           </div>
           {submissionData.description && (
             <div className="pt-4 border-t space-y-1">
@@ -787,14 +946,13 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
               <div className="space-y-2 md:col-span-2">
                 <Label className="flex items-center gap-2 text-slate-700 font-bold">
                   <CalendarIcon className="w-4 h-4 text-primary" />
-                  Sample Given for Fit Date (Read-only) *
+                  Sample Given for Fit Date (Read-only)
                 </Label>
                 <Input 
-                  value={givenForFitDate}
+                  value={givenForFitDate || '-'}
                   readOnly
                   placeholder="DD/MM/YYYY"
-                  className="border-primary/20 bg-slate-50 text-slate-500 cursor-not-allowed font-medium shadow-none focus-visible:ring-0"
-                  required
+                  className="border-primary/20 bg-slate-50 text-slate-600 cursor-not-allowed font-medium shadow-none focus-visible:ring-0"
                 />
               </div>
               {parseInt(round) > 1 && (
@@ -826,9 +984,9 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                 />
               </div>
               <div className="space-y-2">
-                <Label className="flex items-center gap-2 text-slate-700">
+                <Label className="flex items-center gap-2 text-slate-700 font-medium">
                   <MessageSquare className="w-4 h-4 text-primary" />
-                  Comments Received Date *
+                  Comments Date *
                 </Label>
                 <Input 
                   type="date"
@@ -871,6 +1029,116 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
                 className="min-h-[100px] resize-none"
                 required
               />
+            </div>
+
+            {/* Attachments Section */}
+            <div className="space-y-3 pt-4 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <Label className="flex items-center gap-2 text-slate-700 font-medium text-base">
+                  <Paperclip className="w-4 h-4 text-primary" />
+                  Fit Photos & Attachments (Optional)
+                </Label>
+                <Badge variant="outline" className="text-xs bg-slate-50 text-slate-600">
+                  {attachments.length} attached
+                </Badge>
+              </div>
+              <p className="text-xs text-slate-500">
+                Upload fit pictures, garment details, before/after wash comparison, or trims issues (JPG, PNG, WEBP, PDF - max 10MB per file).
+              </p>
+
+              {/* Upload Dropzone */}
+              <div 
+                className="border-2 border-dashed border-slate-200 hover:border-primary/50 transition-colors rounded-xl p-6 text-center bg-slate-50/50 hover:bg-slate-50 flex flex-col items-center justify-center gap-2 cursor-pointer relative"
+                onClick={() => document.getElementById('file-upload-input')?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.files) {
+                    handleFileUpload(e.dataTransfer.files);
+                  }
+                }}
+              >
+                <input 
+                  id="file-upload-input"
+                  type="file" 
+                  multiple 
+                  accept="image/*,application/pdf" 
+                  className="hidden"
+                  onChange={(e) => handleFileUpload(e.target.files)}
+                />
+                <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                  {uploadingFiles ? (
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                  ) : (
+                    <UploadCloud className="w-6 h-6" />
+                  )}
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    {uploadingFiles ? 'Processing files...' : 'Click to browse or drag & drop files here'}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Images are automatically optimized for rapid upload
+                  </p>
+                </div>
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  size="sm" 
+                  className="mt-1 h-8 text-xs pointer-events-none"
+                  disabled={uploadingFiles}
+                >
+                  Select Photos or Documents
+                </Button>
+              </div>
+
+              {/* Attachment Preview Grid */}
+              {attachments.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 pt-2">
+                  {attachments.map((att) => (
+                    <div 
+                      key={att.id} 
+                      className="relative group rounded-lg border border-slate-200 bg-white overflow-hidden shadow-sm flex flex-col"
+                    >
+                      {att.type.startsWith('image/') ? (
+                        <div className="h-28 w-full bg-slate-100 overflow-hidden relative">
+                          <img 
+                            src={att.dataUrl} 
+                            alt={att.name} 
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      ) : (
+                        <div className="h-28 w-full bg-slate-50 flex flex-col items-center justify-center p-2 text-slate-400">
+                          <FileText className="w-8 h-8 text-primary/70 mb-1" />
+                          <span className="text-[10px] font-mono uppercase font-bold text-slate-500">PDF Document</span>
+                        </div>
+                      )}
+                      <div className="p-2 flex flex-col justify-between flex-1 bg-white">
+                        <p className="text-[11px] font-medium text-slate-700 truncate" title={att.name}>
+                          {att.name}
+                        </p>
+                        <p className="text-[10px] text-slate-400">
+                          {att.size < 1024 * 1024 
+                            ? `${Math.round(att.size / 1024)} KB` 
+                            : `${(att.size / (1024 * 1024)).toFixed(1)} MB`}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeAttachment(att.id);
+                        }}
+                        className="absolute top-1 right-1 h-6 w-6 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-destructive transition-colors shadow-sm"
+                        title="Remove attachment"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

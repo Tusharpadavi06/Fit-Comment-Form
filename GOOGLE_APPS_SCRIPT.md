@@ -62,9 +62,9 @@ function doPost(e) {
       // NEW SUBMISSION: Append a truly new row at the bottom
       row = sheet.getLastRow() + 1;
       
-      // Ensure the sheet has enough columns
-      if (sheet.getMaxColumns() < 60) {
-        sheet.insertColumnsAfter(sheet.getMaxColumns(), 60 - sheet.getMaxColumns());
+      // Ensure the sheet has enough columns (up to column BM for round attachments)
+      if (sheet.getMaxColumns() < 70) {
+        sheet.insertColumnsAfter(sheet.getMaxColumns(), 70 - sheet.getMaxColumns());
       }
       
       // Initialize basic identifying markers
@@ -131,6 +131,27 @@ function doPost(e) {
       updateCell(sheet, row, "AS", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AS);
     }
     
+    // 7b. Safe Attachment Handling (BI for R1, BJ for R2, BK for R3, BL for R4, BM for R5)
+    if (data.attachmentColumn) {
+      if (data.collageAttachment && data.collageAttachment.data) {
+        try {
+          var folderId = data.folderId || "1y2caG5vYXZ6JNIibBqR6J4AmqajkXc8E";
+          var folder = DriveApp.getFolderById(folderId);
+          var cBytes = Utilities.base64Decode(data.collageAttachment.data);
+          var cBlob = Utilities.newBlob(cBytes, "image/jpeg", (data.styleNo || "Sample") + "_R" + round + "_" + (data.collageAttachment.name || "fit_photo.jpg"));
+          var file = folder.createFile(cBlob);
+          file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+          var fileUrl = "https://drive.google.com/uc?id=" + file.getId();
+          updateCell(sheet, row, data.attachmentColumn, fileUrl);
+        } catch (attErr) {
+          // Fallback if Drive folder or Drive permissions are not set
+          updateCell(sheet, row, data.attachmentColumn, (data.attachmentsCount || 1) + " files attached");
+        }
+      } else if (data.attachmentsCount) {
+        updateCell(sheet, row, data.attachmentColumn, data.attachmentsCount + " files attached");
+      }
+    }
+    
     // 8. Handle automatic email notification
     if (data.triggerEmail) {
       sendMail(data);
@@ -187,7 +208,8 @@ function updateCell(sheet, row, colName, value) {
     "K": 11, "L": 12, "M": 13, "N": 14, "O": 15, "P": 16, "Q": 17, "R": 18, "S": 19, "T": 20,
     "U": 21, "V": 22, "W": 23, "X": 24, "Y": 25, "Z": 26, "AA": 27, "AB": 28, "AC": 29, "AD": 30,
     "AE": 31, "AF": 32, "AG": 33, "AH": 34, "AI": 35, "AJ": 36, "AK": 37, "AL": 38, "AM": 39, "AN": 40,
-    "AO": 41, "AP": 42, "AQ": 43, "AR": 44, "AS": 45, "AX": 50
+    "AO": 41, "AP": 42, "AQ": 43, "AR": 44, "AS": 45, "AX": 50,
+    "BI": 61, "BJ": 62, "BK": 63, "BL": 64, "BM": 65
   };
   var colIndex = colMap[colName.toUpperCase()];
   if (colIndex) {

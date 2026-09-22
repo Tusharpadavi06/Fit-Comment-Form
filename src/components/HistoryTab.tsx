@@ -5,7 +5,7 @@ import { collection, query, where, getDocs, orderBy, limit } from 'firebase/fire
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
-import { Loader2, Search, ExternalLink, RefreshCw, Calendar, User, Tag, Plus } from 'lucide-react';
+import { Loader2, Search, ExternalLink, RefreshCw, Calendar, User, Tag, Plus, Camera } from 'lucide-react';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { toast } from 'sonner';
@@ -55,6 +55,14 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
     // Fallback to base color for round 1 if round1 object doesn't have it
     if (round === '1') return assignment.color || '-';
     return '-';
+  };
+
+  const getRoundAttachmentsCount = (assignment: any, round: string): number => {
+    const rData = assignment[`round${round}`];
+    if (rData && Array.isArray(rData.attachments)) {
+      return rData.attachments.length;
+    }
+    return 0;
   };
 
   const fetchSubmissions = async () => {
@@ -321,23 +329,73 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                                             
                                             {/* ROUND 1 */}
                                             <TableCell className="text-[10px] py-1.5 text-center font-mono bg-indigo-50/5 border-r whitespace-nowrap">{getRoundDate(a, '1')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-indigo-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '1')}>{getRoundColor(a, '1')}</TableCell>
+                                            <TableCell className="text-[10px] py-1.5 text-center bg-indigo-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '1')}>
+                                              <span className="inline-flex items-center gap-1 justify-center">
+                                                <span>{getRoundColor(a, '1')}</span>
+                                                {getRoundAttachmentsCount(a, '1') > 0 && (
+                                                  <span title={`${getRoundAttachmentsCount(a, '1')} photo(s) attached`} className="inline-flex items-center text-indigo-600 bg-indigo-100 rounded px-1 py-0.2 text-[8px] font-bold">
+                                                    <Camera className="w-2.5 h-2.5 mr-0.5" />
+                                                    {getRoundAttachmentsCount(a, '1')}
+                                                  </span>
+                                                )}
+                                              </span>
+                                            </TableCell>
                                             
                                             {/* ROUND 2 */}
                                             <TableCell className="text-[10px] py-1.5 text-center font-mono bg-amber-50/5 border-r whitespace-nowrap">{getRoundDate(a, '2')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-amber-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '2')}>{getRoundColor(a, '2')}</TableCell>
+                                            <TableCell className="text-[10px] py-1.5 text-center bg-amber-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '2')}>
+                                              <span className="inline-flex items-center gap-1 justify-center">
+                                                <span>{getRoundColor(a, '2')}</span>
+                                                {getRoundAttachmentsCount(a, '2') > 0 && (
+                                                  <span title={`${getRoundAttachmentsCount(a, '2')} photo(s) attached`} className="inline-flex items-center text-amber-700 bg-amber-100 rounded px-1 py-0.2 text-[8px] font-bold">
+                                                    <Camera className="w-2.5 h-2.5 mr-0.5" />
+                                                    {getRoundAttachmentsCount(a, '2')}
+                                                  </span>
+                                                )}
+                                              </span>
+                                            </TableCell>
                                             
                                             {/* ROUND 3 */}
                                             <TableCell className="text-[10px] py-1.5 text-center font-mono bg-emerald-50/5 border-r whitespace-nowrap">{getRoundDate(a, '3')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-emerald-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '3')}>{getRoundColor(a, '3')}</TableCell>
+                                            <TableCell className="text-[10px] py-1.5 text-center bg-emerald-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '3')}>
+                                              <span className="inline-flex items-center gap-1 justify-center">
+                                                <span>{getRoundColor(a, '3')}</span>
+                                                {getRoundAttachmentsCount(a, '3') > 0 && (
+                                                  <span title={`${getRoundAttachmentsCount(a, '3')} photo(s) attached`} className="inline-flex items-center text-emerald-700 bg-emerald-100 rounded px-1 py-0.2 text-[8px] font-bold">
+                                                    <Camera className="w-2.5 h-2.5 mr-0.5" />
+                                                    {getRoundAttachmentsCount(a, '3')}
+                                                  </span>
+                                                )}
+                                              </span>
+                                            </TableCell>
 
                                             {/* ROUND 4 */}
                                             <TableCell className="text-[10px] py-1.5 text-center font-mono bg-purple-50/5 border-r whitespace-nowrap">{getRoundDate(a, '4')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-purple-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '4')}>{getRoundColor(a, '4')}</TableCell>
+                                            <TableCell className="text-[10px] py-1.5 text-center bg-purple-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '4')}>
+                                              <span className="inline-flex items-center gap-1 justify-center">
+                                                <span>{getRoundColor(a, '4')}</span>
+                                                {getRoundAttachmentsCount(a, '4') > 0 && (
+                                                  <span title={`${getRoundAttachmentsCount(a, '4')} photo(s) attached`} className="inline-flex items-center text-purple-700 bg-purple-100 rounded px-1 py-0.2 text-[8px] font-bold">
+                                                    <Camera className="w-2.5 h-2.5 mr-0.5" />
+                                                    {getRoundAttachmentsCount(a, '4')}
+                                                  </span>
+                                                )}
+                                              </span>
+                                            </TableCell>
 
                                             {/* ROUND 5 */}
                                             <TableCell className="text-[10px] py-1.5 text-center font-mono bg-rose-50/5 border-r whitespace-nowrap">{getRoundDate(a, '5')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-rose-50/5 truncate max-w-[80px]" title={getRoundColor(a, '5')}>{getRoundColor(a, '5')}</TableCell>
+                                            <TableCell className="text-[10px] py-1.5 text-center bg-rose-50/5 truncate max-w-[80px]" title={getRoundColor(a, '5')}>
+                                              <span className="inline-flex items-center gap-1 justify-center">
+                                                <span>{getRoundColor(a, '5')}</span>
+                                                {getRoundAttachmentsCount(a, '5') > 0 && (
+                                                  <span title={`${getRoundAttachmentsCount(a, '5')} photo(s) attached`} className="inline-flex items-center text-rose-700 bg-rose-100 rounded px-1 py-0.2 text-[8px] font-bold">
+                                                    <Camera className="w-2.5 h-2.5 mr-0.5" />
+                                                    {getRoundAttachmentsCount(a, '5')}
+                                                  </span>
+                                                )}
+                                              </span>
+                                            </TableCell>
                                           </TableRow>
                                         ))}
                                       </TableBody>

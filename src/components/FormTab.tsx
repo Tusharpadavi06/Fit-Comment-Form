@@ -437,12 +437,13 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         // Ensure the ID is deterministic based on current submission and model email
         // This forces merging in the database and Google Sheets
         const finalAId = getDeterministicId(submissionId!, a.modelEmail);
+        const dateQuery = a.givenForFitDate?.trim() ? `&givenDate=${encodeURIComponent(a.givenForFitDate.trim())}` : '';
         
-        const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=1`;
-        const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=2`;
-        const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=3`;
-        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=4`;
-        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=5`;
+        const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=1${dateQuery}`;
+        const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=2${dateQuery}`;
+        const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=3${dateQuery}`;
+        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=4${dateQuery}`;
+        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=5${dateQuery}`;
         return { ...a, id: finalAId, r1Link, r2Link, r3Link, r4Link, r5Link };
       });
 

@@ -1,46 +1,31 @@
-# Google Apps Script for SOIE Fit Comment System & Photos Sync
+import React, { useState } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from './ui/dialog';
+import { Button } from './ui/button';
+import { Badge } from './ui/badge';
+import { Card, CardContent } from './ui/card';
+import { 
+  FileSpreadsheet, 
+  ExternalLink, 
+  Copy, 
+  Check, 
+  RefreshCw, 
+  AlertTriangle, 
+  CheckCircle2, 
+  HelpCircle,
+  Camera,
+  Layers
+} from 'lucide-react';
+import { toast } from 'sonner';
+import { testGoogleSheetsWebhook } from '../services/googleSheetsService';
 
-This guide provides the complete, working code for **`Snapped.gs`** to fix photo thumbnails in Google Sheets (**Columns BI to BM**) and sync all comments.
-
----
-
-## ⚠️ Important Note on `Code.gs` vs `Snapped.gs`
-
-In Google Apps Script, all `.gs` files in the same project share the **same global namespace**.
-If **both** `Code.gs` and `Snapped.gs` have `function doPost(e)`, Google Apps Script gets confused and executes whichever was loaded first/last, which prevents `Snapped.gs` from running!
-
-### ✅ How to avoid collision without losing `Code.gs`:
-1. Open your Google Sheet > **Extensions** > **Apps Script**.
-2. Open `Code.gs`:
-   - Change line 1 from:
-     ```javascript
-     function doPost(e) {
-     ```
-     to:
-     ```javascript
-     function doPost_original(e) {
-     ```
-   *(This ensures your original `Code.gs` remains completely safe and untouched, but won't block `Snapped.gs`)*
-3. Open `Snapped.gs`:
-   - Replace all its content with the **Complete `Snapped.gs` Code** below.
-   - Click **Save** (disk icon).
-4. Run `testRun()`:
-   - In the toolbar dropdown next to the "Debug" button, select **`testRun`** and click **Run**.
-   - If prompted, click **Review Permissions** > **Allow**.
-5. Deploy:
-   - Click **Deploy** > **New Deployment** (or Manage Deployments > Edit > New Version).
-   - Type: **Web app**.
-   - Execute as: **Me**.
-   - Who has access: **Anyone**.
-   - Click **Deploy** and copy the new **Web app URL**.
-   - Paste that URL into AI Studio Settings (`VITE_GOOGLE_SHEETS_WEBHOOK_URL`).
-
----
-
-## 📜 Complete Working Code for `Snapped.gs`
-
-```javascript
-/**
+export const APPS_SCRIPT_CODE = `/**
  * Snapped.gs - SOIE Fit Comment & Multi-Photo Snapshots Sync
  * 
  * Features:
@@ -333,12 +318,12 @@ function handleAttachments(data, sheet, rowIndex) {
 
       // Cell Note with direct links to every single photo
       var totalPhotos = photoViewLinks.length || (data.attachmentsCount || 1);
-      var note = "📸 Fit Photos (" + totalPhotos + " Photos Attached):\n";
-      note += "👉 Click cell to open & zoom full HD in Google Drive\n\n";
+      var note = "📸 Fit Photos (" + totalPhotos + " Photos Attached):\\n";
+      note += "👉 Click cell to open & zoom full HD in Google Drive\\n\\n";
       for (var k = 0; k < photoViewLinks.length; k++) {
-        note += "• Photo " + (k + 1) + ": " + photoViewLinks[k] + "\n";
+        note += "• Photo " + (k + 1) + ": " + photoViewLinks[k] + "\\n";
       }
-      note += "\n📁 All Photos Folder: " + targetFolder.getUrl();
+      note += "\\n📁 All Photos Folder: " + targetFolder.getUrl();
       cell.setNote(note);
 
     } catch (imgErr) {
@@ -517,29 +502,187 @@ function testRun() {
   Logger.log("Google Drive Folder: " + (folder ? folder.getName() : "None"));
 
   Logger.log("=== SUCCESS: Permissions authorized successfully! ===");
+}`;
+
+export function GoogleSheetsSetupModal() {
+  const [testing, setTesting] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const sheetId = import.meta.env.VITE_GOOGLE_SHEET_ID || "1cBuUaoIh_-uWnwmtijsEX2JcZGTbhNirbVdQXjKyQ2o";
+  const webhookUrl = import.meta.env.VITE_GOOGLE_SHEETS_WEBHOOK_URL || "";
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testGoogleSheetsWebhook();
+      setTestResult(result);
+      if (result.success) {
+        toast.success("Webhook connection test successful!");
+      } else {
+        toast.error(result.message);
+      }
+    } catch (e: any) {
+      setTestResult({ success: false, message: e.message || "Failed to reach webhook." });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(APPS_SCRIPT_CODE);
+    setCopied(true);
+    toast.success("Google Apps Script copied to clipboard!");
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  return (
+    <Dialog>
+      <DialogTrigger
+        render={
+          <Button 
+            variant="outline" 
+            size="sm" 
+            className="h-8 gap-1.5 text-xs font-medium border-slate-300 hover:bg-slate-50 text-slate-700 shadow-xs cursor-pointer"
+          />
+        }
+      >
+        <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+        <span>Google Sheets & Photos</span>
+      </DialogTrigger>
+
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+        <DialogHeader className="space-y-1">
+          <div className="flex items-center gap-2">
+            <div className="h-8 w-8 rounded-lg bg-emerald-100 flex items-center justify-center text-emerald-700">
+              <FileSpreadsheet className="w-4 h-4" />
+            </div>
+            <div>
+              <DialogTitle className="text-base font-bold text-slate-900">
+                Google Sheets & Photo Snapshots Setup
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                Sync fit evaluation comments and live photo snapshots to your spreadsheet
+              </DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+
+        <div className="space-y-4 pt-2">
+          {/* Target Sheet Info */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-700">Active Google Sheet ID</span>
+              <a 
+                href={`https://docs.google.com/spreadsheets/d/${sheetId}/edit`} 
+                target="_blank" 
+                rel="noreferrer" 
+                className="text-[11px] text-indigo-600 hover:underline inline-flex items-center gap-1 font-medium"
+              >
+                Open Google Sheet
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+            <div className="font-mono text-xs text-slate-800 bg-white p-2 rounded-md border select-all truncate">
+              {sheetId}
+            </div>
+          </div>
+
+          {/* Webhook Status & Test */}
+          <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-700">Apps Script Webhook Status</span>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={handleTestConnection} 
+                disabled={testing}
+                className="h-7 text-xs gap-1.5"
+              >
+                <RefreshCw className={`w-3 h-3 ${testing ? 'animate-spin' : ''}`} />
+                {testing ? 'Testing...' : 'Test Connection'}
+              </Button>
+            </div>
+
+            {testResult && (
+              <div className={`p-2.5 rounded-lg border text-xs flex items-start gap-2 ${
+                testResult.success 
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
+              }`}>
+                {testResult.success ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <p className="font-semibold">{testResult.success ? 'Connected Successfully' : 'Action Required'}</p>
+                  <p className="text-[11px] mt-0.5 opacity-90">{testResult.message}</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Key Columns Guide */}
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-1">
+              <div className="font-semibold text-indigo-900 flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                Column AX (Col 50)
+              </div>
+              <p className="text-[11px] text-indigo-700 leading-relaxed">
+                Stores unique <strong>Assignment ID</strong>. Keeps Rounds 1 to 5 synchronized in the exact same row.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 space-y-1">
+              <div className="font-semibold text-emerald-900 flex items-center gap-1.5">
+                <Camera className="w-3.5 h-3.5 text-emerald-600" />
+                Columns BI – BM (Cols 61–65)
+              </div>
+              <p className="text-[11px] text-emerald-700 leading-relaxed">
+                Live <strong>=IMAGE(...)</strong> thumbnail grid for <strong>1 to 10 photos</strong>. Click cell to open &amp; zoom in full HD on Google Drive!
+              </p>
+            </div>
+          </div>
+
+          {/* Snapped.gs Instructions */}
+          <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3.5 space-y-2 text-xs">
+            <div className="font-bold text-amber-900 flex items-center gap-1.5">
+              <span>⚠️ Important: Using <code>Snapped.gs</code> with existing <code>Code.gs</code></span>
+            </div>
+            <p className="text-[11px] text-amber-800 leading-relaxed">
+              Google Apps Script shares one global namespace. If <code>Code.gs</code> and <code>Snapped.gs</code> both have <code>function doPost</code>, Apps Script gets confused.
+            </p>
+            <ol className="text-[11px] text-amber-900 space-y-1.5 list-decimal pl-4 leading-relaxed font-medium">
+              <li>
+                In <code>Code.gs</code>, change line 1 from <code>function doPost(e)</code> to <code>function doPost_original(e)</code>. <em>(Keeps your original code 100% safe!)</em>
+              </li>
+              <li>
+                In <code>Snapped.gs</code>, paste the complete code copied below and click <strong>Save</strong>.
+              </li>
+              <li>
+                In the function dropdown, select <strong><code>testRun</code></strong> and click <strong>Run</strong>. Click <em>Review Permissions &gt; Allow</em> to authorize Drive &amp; Sheets access.
+              </li>
+              <li>
+                Click <strong>Deploy &gt; New Deployment</strong> (or Edit latest version), select <strong>Web app</strong>, Execute as <strong>Me</strong>, Who has access: <strong>Anyone</strong>.
+              </li>
+            </ol>
+          </div>
+
+          {/* Code Copy Button */}
+          <div className="pt-1">
+            <Button 
+              className="w-full gap-2 bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs h-9 shadow-sm"
+              onClick={handleCopyCode}
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? 'Copied to Clipboard!' : 'Copy Complete Snapped.gs Script Code'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
-```
-
----
-
-## 📊 Complete Column Mapping Reference
-
-| Column Name | Col # | Data / Function |
-| :--- | :--- | :--- |
-| **Col A** | 1 | Timestamp |
-| **Col B** | 2 | Model Name |
-| **Col C** | 3 | Type of Sample (e.g. 1st Fit Sample) |
-| **Col D** | 4 | Style No (e.g. SOIE-BR-1042) |
-| **Col E** | 5 | Description |
-| **Col F** | 6 | Size (e.g. 34B) |
-| **Col G to M** | 7–13 | **Round 1 Evaluation**: Color (G), Given Date (H), Comments Date (I), Received Date (J), Before Wash (K), After Wash (L), Fabric/Trims (M) |
-| **Col O to U** | 15–21 | **Round 2 Evaluation**: Color (O), Given Date (P), Comments Date (Q), Received Date (R), Before Wash (S), After Wash (T), Fabric/Trims (U) |
-| **Col W to AC**| 23–29 | **Round 3 Evaluation**: Color (W), Given Date (X), Comments Date (Y), Received Date (Z), Before Wash (AA), After Wash (AB), Fabric/Trims (AC) |
-| **Col AE to AK**| 31–37 | **Round 4 Evaluation**: Color (AE), Given Date (AF), Comments Date (AG), Received Date (AH), Before Wash (AI), After Wash (AJ), Fabric/Trims (AK) |
-| **Col AM to AS**| 39–45 | **Round 5 Evaluation**: Color (AM), Given Date (AN), Comments Date (AO), Received Date (AP), Before Wash (AQ), After Wash (AR), Fabric/Trims (AS) |
-| **Col AX** | 50 | **Assignment ID**: Unique Supabase ID for persistent multi-round row matching |
-| **Col BI** | 61 | **R1 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to Drive |
-| **Col BJ** | 62 | **R2 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to Drive |
-| **Col BK** | 63 | **R3 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to Drive |
-| **Col BL** | 64 | **R4 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to Drive |
-| **Col BM** | 65 | **R5 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to Drive |

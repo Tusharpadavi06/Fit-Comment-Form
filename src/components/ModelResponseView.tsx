@@ -8,10 +8,17 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Badge } from './ui/badge';
-import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare, UploadCloud, X, FileText, Paperclip } from 'lucide-react';
+import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare, UploadCloud, X, FileText, Paperclip, Download, Copy, Send, Printer, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
 import { getSeriesFromStyleNumber } from '../lib/series-utils';
+import { 
+  SoieFeedbackReportCard, 
+  generateSoieReportHtml, 
+  getRoundOrdinal, 
+  getRoundName, 
+  formatDisplayDate 
+} from './SoieFeedbackReportCard';
 
 // Helper for Today's date in YYYY-MM-DD format
 const getTodayYyyymmdd = (): string => {
@@ -78,6 +85,120 @@ const yyyymmddToDdmmyyyy = (dateStr: string): string => {
   return '';
 };
 
+// Helper to combine images into a composite thumbnail snapshot for spreadsheet cell
+async function generateCollageAttachment(attachments: AttachmentItem[]): Promise<{ data: string; name: string } | null> {
+  const imageAttachments = attachments.filter(a => a.type?.startsWith('image/') && a.dataUrl);
+  if (imageAttachments.length === 0) return null;
+  
+  if (imageAttachments.length === 1) {
+    const primary = imageAttachments[0];
+    return {
+      data: (primary.dataUrl || '').split(',')[1] || '',
+      name: primary.name || 'fit_photo.jpg'
+    };
+  }
+
+  // Combine up to 10 images into an optimized multi-photo grid snapshot for spreadsheet cell
+  try {
+    const count = Math.min(imageAttachments.length, 10);
+    let cols = 2;
+    let rows = 1;
+    if (count === 2) { cols = 2; rows = 1; }
+    else if (count === 3) { cols = 3; rows = 1; }
+    else if (count === 4) { cols = 2; rows = 2; }
+    else if (count <= 6) { cols = 3; rows = 2; }
+    else if (count <= 9) { cols = 3; rows = 3; }
+    else { cols = 5; rows = 2; }
+
+    const cellWidth = 320;
+    const cellHeight = 360;
+    const canvas = document.createElement('canvas');
+    canvas.width = cols * cellWidth;
+    canvas.height = rows * cellHeight;
+    const ctx = canvas.getContext('2d');
+    
+    if (ctx) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      const loadPromises = imageAttachments.slice(0, count).map((att, i) => {
+        return new Promise<void>((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            const colIndex = i % cols;
+            const rowIndex = Math.floor(i / cols);
+            const x = colIndex * cellWidth;
+            const y = rowIndex * cellHeight;
+
+            const scale = Math.max(cellWidth / img.width, cellHeight / img.height);
+            const w = img.width * scale;
+            const h = img.height * scale;
+            const offsetX = x + (cellWidth - w) / 2;
+            const offsetY = y + (cellHeight - h) / 2;
+            
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(x, y, cellWidth, cellHeight);
+            ctx.clip();
+            ctx.drawImage(img, offsetX, offsetY, w, h);
+            ctx.restore();
+            
+            // Clean separator borders
+            ctx.strokeStyle = '#94a3b8';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(x, y, cellWidth, cellHeight);
+
+            // Sequence badge (1, 2, 3...)
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+            ctx.beginPath();
+            if (typeof ctx.roundRect === 'function') {
+              ctx.roundRect(x + 10, y + 10, 36, 28, 6);
+            } else {
+              ctx.rect(x + 10, y + 10, 36, 28);
+            }
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 16px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(`${i + 1}`, x + 28, y + 24);
+
+            resolve();
+          };
+          img.onerror = () => resolve();
+          img.src = att.dataUrl!;
+        });
+      });
+      
+      await Promise.all(loadPromises);
+
+      // Add a high-visibility bottom indicator banner
+      const bannerHeight = 36;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
+      ctx.fillRect(0, canvas.height - bannerHeight, canvas.width, bannerHeight);
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`📸 ${count} PHOTOS • CLICK TO OPEN & ZOOM FULL HD`, canvas.width / 2, canvas.height - (bannerHeight / 2));
+
+      const collageDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      return {
+        data: collageDataUrl.split(',')[1] || '',
+        name: `composite_${count}_photos.jpg`
+      };
+    }
+  } catch (err) {
+    console.warn("Collage generation error, falling back to first image:", err);
+  }
+
+  const fallback = imageAttachments[0];
+  return {
+    data: (fallback.dataUrl || '').split(',')[1] || '',
+    name: fallback.name || 'fit_photo.jpg'
+  };
+}
+
 interface ModelResponseViewProps {
   submissionId: string;
   assignmentId: string;
@@ -103,6 +224,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const [color, setColor] = useState('');
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [hasExistingSubmission, setHasExistingSubmission] = useState(false);
+  const [showReportPreview, setShowReportPreview] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -304,13 +427,17 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
     }
     
     // 2. Given for Fit Date (determine correct date per round)
-    let resolvedFitDate = '';
+    const urlParams = new URLSearchParams(window.location.search);
+    const queryGivenDate = urlParams.get('givenDate') || urlParams.get('date') || '';
+    let resolvedFitDate = queryGivenDate ? decodeURIComponent(queryGivenDate).trim() : '';
     
     // Priority 1: Current specific round's given_for_fit_date
-    for (const key of currentRoundKeys) {
-      if (assignmentData[key]?.given_for_fit_date) {
-        resolvedFitDate = assignmentData[key].given_for_fit_date;
-        break;
+    if (!resolvedFitDate) {
+      for (const key of currentRoundKeys) {
+        if (assignmentData[key]?.given_for_fit_date) {
+          resolvedFitDate = assignmentData[key].given_for_fit_date;
+          break;
+        }
       }
     }
     
@@ -340,24 +467,30 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
     // 3. Current active round saved data pre-fill (if already submitted/saved previously in this round)
     let loadedReceivedDate = '';
     let loadedCommentsDate = '';
+    let foundExisting = false;
     
     for (const key of currentRoundKeys) {
       if (assignmentData[key]) {
         const roundData = assignmentData[key];
         if (roundData.received_date || roundData.receivedDate || roundData.fit_date) {
           loadedReceivedDate = roundData.received_date || roundData.receivedDate || roundData.fit_date || '';
+          foundExisting = true;
         }
         if (roundData.comments_date || roundData.commentsDate || roundData.comments_received_date || roundData.commentsReceivedDate) {
           loadedCommentsDate = roundData.comments_date || roundData.commentsDate || roundData.comments_received_date || roundData.commentsReceivedDate || '';
+          foundExisting = true;
         }
         if (roundData.before_wash || roundData.beforeWash) {
           setBeforeWash(roundData.before_wash || roundData.beforeWash);
+          foundExisting = true;
         }
         if (roundData.after_wash || roundData.afterWash) {
           setAfterWash(roundData.after_wash || roundData.afterWash);
+          foundExisting = true;
         }
         if (roundData.fabric_trims || roundData.fabricTrims) {
           setFabricTrims(roundData.fabric_trims || roundData.fabricTrims);
+          foundExisting = true;
         }
         if (roundData.attachments && Array.isArray(roundData.attachments)) {
           setAttachments(roundData.attachments);
@@ -365,6 +498,10 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       }
     }
     
+    if (foundExisting) {
+      setHasExistingSubmission(true);
+    }
+
     setReceivedDate(ddmmyyyyToYyyymmdd(loadedReceivedDate));
     // Default to Today's date if no comments date has been previously saved
     if (loadedCommentsDate) {
@@ -517,7 +654,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         });
       });
 
-      // 1b. Supabase Update (Sync round data to Supabase)
+      // 1b. Supabase Update (Sync round data & photos to Supabase)
       try {
         if (assignmentId) {
           const supabaseRoundKey = `round${round}`; // round1, round2, round3
@@ -530,28 +667,48 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
             after_wash: afterWash,
             fabric_trims: fabricTrims,
             color: color || assignmentData.color || assignmentData.modelColor,
-            attachments: attachments.map(a => ({ id: a.id, name: a.name, size: a.size, type: a.type })),
+            attachments: attachments.map(a => ({ 
+              id: a.id, 
+              name: a.name, 
+              size: a.size, 
+              type: a.type, 
+              dataUrl: a.dataUrl // Crucial: Store image dataUrl so photos are saved in Supabase
+            })),
             submitted_at: new Date().toISOString()
           };
           
           console.log(`Updating Supabase Assignment ${assignmentId} for Round ${round}...`);
           
+          const targetAssId = assignmentData?.id || assignmentId || aId;
           const { error: updErr } = await supabase
             .from('assignments')
-            .update({ [supabaseRoundKey]: roundData })
-            .eq('id', assignmentId);
+            .update({ 
+              [supabaseRoundKey]: roundData,
+              attachments_count: attachments.length,
+              attachment_names: attachments.map(a => a.name)
+            })
+            .eq('id', targetAssId);
           
           if (updErr) {
-            console.warn("Supabase Assignment Update Error (retrying without attachments):", updErr.message);
-            // In case the attachments column isn't present in Supabase table
-            const fallbackRoundData = { ...roundData };
-            delete (fallbackRoundData as any).attachments;
+            console.warn("Supabase Assignment Update Error with full dataUrl (retrying with compressed thumbnails):", updErr.message);
+            // In case payload size was exceeded, store compressed thumbnails
+            const thumbnailAttachments = attachments.map(a => ({
+              id: a.id,
+              name: a.name,
+              size: a.size,
+              type: a.type,
+              dataUrl: a.dataUrl ? a.dataUrl.slice(0, 100000) : undefined
+            }));
             await supabase
               .from('assignments')
-              .update({ [supabaseRoundKey]: fallbackRoundData })
-              .eq('id', assignmentId);
+              .update({ 
+                [supabaseRoundKey]: { ...roundData, attachments: thumbnailAttachments },
+                attachments_count: attachments.length,
+                attachment_names: attachments.map(a => a.name)
+              })
+              .eq('id', targetAssId);
           } else {
-            console.log("Supabase Assignment Update successful");
+            console.log("Supabase Assignment Update with photos successful");
           }
         }
       } catch (suErr) {
@@ -595,6 +752,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       const adminEditR5Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=5`;
 
       const series = getSeriesFromStyleNumber(submissionData.style_number || submissionData.styleNo || "");
+      const collage = await generateCollageAttachment(attachments);
 
       const sheetPayload = {
         assignmentId: assignmentId,
@@ -618,20 +776,40 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         fabricComments: fabricTrims,
         fabricTrims: fabricTrims,
         fabric_trims: fabricTrims,
+        AX: assignmentId || aId,
         attachmentColumn: round === "1" ? "BI" : round === "2" ? "BJ" : round === "3" ? "BK" : round === "4" ? "BL" : "BM",
         attachmentsCount: attachments.length,
-        attachments: attachments.map(a => ({ name: a.name, size: a.size, type: a.type })),
-        collageAttachment: attachments.find(a => a.type.startsWith('image/')) ? {
-          data: (attachments.find(a => a.type.startsWith('image/'))?.dataUrl || '').split(',')[1] || '',
-          name: attachments.find(a => a.type.startsWith('image/'))?.name || 'photo.jpg'
-        } : null,
+        attachments: attachments.map(a => ({
+          name: a.name,
+          size: a.size,
+          type: a.type,
+          data: (a.dataUrl || '').split(',')[1] || ''
+        })),
+        collageAttachment: collage,
+        allImages: attachments.filter(a => a.type.startsWith('image/')).map(a => ({
+          name: a.name,
+          type: a.type,
+          size: a.size,
+          data: (a.dataUrl || '').split(',')[1] || ''
+        })),
+        images: attachments.filter(a => a.type.startsWith('image/')).map(a => ({
+          name: a.name,
+          data: (a.dataUrl || '').split(',')[1] || ''
+        })),
+        
+        // Direct column photo snapshot indicators
+        "BI": round === "1" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round1?.attachment_name || ""),
+        "BJ": round === "2" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round2?.attachment_name || ""),
+        "BK": round === "3" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round3?.attachment_name || ""),
+        "BL": round === "4" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round4?.attachment_name || ""),
+        "BM": round === "5" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round5?.attachment_name || ""),
         // Removed explicit link from N, V, AD as per user request
         
         // Round 1 (G-M)
         "G": round === "1" ? (color || assignmentData.color || "") : (assignmentData.round1?.color || assignmentData.round_1?.color || ""),
         "H": round === "1" ? (givenForFitDate || "") : (assignmentData.round1?.given_for_fit_date || assignmentData.round_1?.given_for_fit_date || ""),
-        "I": round === "1" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round1?.comments_received_date || assignmentData.round_1?.comments_received_date || ""),
-        "J": round === "1" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round1?.received_date || assignmentData.round_1?.received_date || ""),
+        "I": round === "1" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round1?.received_date || assignmentData.round_1?.received_date || ""),
+        "J": round === "1" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round1?.comments_date || assignmentData.round1?.comments_received_date || assignmentData.round_1?.comments_received_date || ""),
         "K": round === "1" ? (beforeWash || "") : (assignmentData.round1?.before_wash || assignmentData.round_1?.before_wash || ""),
         "L": round === "1" ? (afterWash || "") : (assignmentData.round1?.after_wash || assignmentData.round_1?.after_wash || ""),
         "M": round === "1" ? (fabricTrims || "") : (assignmentData.round1?.fabric_trims || assignmentData.round_1?.fabric_trims || ""),
@@ -639,8 +817,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 2 (O-U)
         "O": round === "2" ? (color || assignmentData.color || "") : (assignmentData.round2?.color || assignmentData.round_2?.color || ""),
         "P": round === "2" ? (givenForFitDate || "") : (assignmentData.round2?.given_for_fit_date || assignmentData.round_2?.given_for_fit_date || ""),
-        "Q": round === "2" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round2?.comments_received_date || assignmentData.round_2?.comments_received_date || ""),
-        "R": round === "2" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round2?.received_date || assignmentData.round_2?.received_date || ""),
+        "Q": round === "2" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round2?.received_date || assignmentData.round_2?.received_date || ""),
+        "R": round === "2" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round2?.comments_date || assignmentData.round2?.comments_received_date || assignmentData.round_2?.comments_received_date || ""),
         "S": round === "2" ? (beforeWash || "") : (assignmentData.round2?.before_wash || assignmentData.round_2?.before_wash || ""),
         "T": round === "2" ? (afterWash || "") : (assignmentData.round2?.after_wash || assignmentData.round_2?.after_wash || ""),
         "U": round === "2" ? (fabricTrims || "") : (assignmentData.round2?.fabric_trims || assignmentData.round_2?.fabric_trims || ""),
@@ -648,8 +826,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 3 (W-AC)
         "W": round === "3" ? (color || assignmentData.color || "") : (assignmentData.round3?.color || assignmentData.round_3?.color || ""),
         "X": round === "3" ? (givenForFitDate || "") : (assignmentData.round3?.given_for_fit_date || assignmentData.round_3?.given_for_fit_date || ""),
-        "Y": round === "3" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round3?.comments_received_date || assignmentData.round_3?.comments_received_date || ""),
-        "Z": round === "3" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round3?.received_date || assignmentData.round_3?.received_date || ""),
+        "Y": round === "3" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round3?.received_date || assignmentData.round_3?.received_date || ""),
+        "Z": round === "3" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round3?.comments_date || assignmentData.round3?.comments_received_date || assignmentData.round_3?.comments_received_date || ""),
         "AA": round === "3" ? (beforeWash || "") : (assignmentData.round3?.before_wash || assignmentData.round_3?.before_wash || ""),
         "AB": round === "3" ? (afterWash || "") : (assignmentData.round3?.after_wash || assignmentData.round_3?.after_wash || ""),
         "AC": round === "3" ? (fabricTrims || "") : (assignmentData.round3?.fabric_trims || assignmentData.round_3?.fabric_trims || ""),
@@ -657,8 +835,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 4 (AE-AK)
         "AE": round === "4" ? (color || assignmentData.color || "") : (assignmentData.round4?.color || (assignmentData.round_4?.color || "")),
         "AF": round === "4" ? (givenForFitDate || "") : (assignmentData.round4?.given_for_fit_date || (assignmentData.round_4?.given_for_fit_date || "")),
-        "AG": round === "4" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round4?.comments_received_date || (assignmentData.round_4?.comments_received_date || "")),
-        "AH": round === "4" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round4?.received_date || (assignmentData.round_4?.received_date || "")),
+        "AG": round === "4" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round4?.received_date || (assignmentData.round_4?.received_date || "")),
+        "AH": round === "4" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round4?.comments_date || assignmentData.round4?.comments_received_date || (assignmentData.round_4?.comments_received_date || "")),
         "AI": round === "4" ? (beforeWash || "") : (assignmentData.round4?.before_wash || (assignmentData.round_4?.before_wash || "")),
         "AJ": round === "4" ? (afterWash || "") : (assignmentData.round4?.after_wash || (assignmentData.round_4?.after_wash || "")),
         "AK": round === "4" ? (fabricTrims || "") : (assignmentData.round4?.fabric_trims || (assignmentData.round_4?.fabric_trims || "")),
@@ -666,8 +844,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         // Round 5 (AM-AS)
         "AM": round === "5" ? (color || assignmentData.color || "") : (assignmentData.round5?.color || (assignmentData.round_5?.color || "")),
         "AN": round === "5" ? (givenForFitDate || "") : (assignmentData.round5?.given_for_fit_date || (assignmentData.round_5?.given_for_fit_date || "")),
-        "AO": round === "5" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round5?.comments_received_date || (assignmentData.round_5?.comments_received_date || "")),
-        "AP": round === "5" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round5?.received_date || (assignmentData.round_5?.received_date || "")),
+        "AO": round === "5" ? (yyyymmddToDdmmyyyy(receivedDate) || "") : (assignmentData.round5?.received_date || (assignmentData.round_5?.received_date || "")),
+        "AP": round === "5" ? (yyyymmddToDdmmyyyy(commentsReceivedDate) || "") : (assignmentData.round5?.comments_date || assignmentData.round5?.comments_received_date || (assignmentData.round_5?.comments_received_date || "")),
         "AQ": round === "5" ? (beforeWash || "") : (assignmentData.round5?.before_wash || (assignmentData.round_5?.before_wash || "")),
         "AR": round === "5" ? (afterWash || "") : (assignmentData.round5?.after_wash || (assignmentData.round_5?.after_wash || "")),
         "AS": round === "5" ? (fabricTrims || "") : (assignmentData.round5?.fabric_trims || (assignmentData.round_5?.fabric_trims || "")),
@@ -682,7 +860,10 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         "Size": assignmentData.size || "",
         "Color": color || assignmentData.color || "",
         "Round": String(round),
-        "Date Sent": (givenForFitDate || assignmentData?.given_for_fit_date || assignmentData?.givenForFitDate) || (submissionData?.created_at ? new Date(submissionData.created_at).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB')),
+        "Date Sent": givenForFitDate || assignmentData?.given_for_fit_date || assignmentData?.givenForFitDate || "",
+        "Sample Given for Fit Date": givenForFitDate || assignmentData?.given_for_fit_date || assignmentData?.givenForFitDate || "",
+        "Comments Date": yyyymmddToDdmmyyyy(commentsReceivedDate),
+        "Sample Received Date": yyyymmddToDdmmyyyy(receivedDate),
         "Instructions": submissionData.description || "",
         "Round 2 Edit Link": adminEditR2Link,
         "Round 3 Edit Link": adminEditR3Link,
@@ -773,6 +954,83 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
     }
   };
 
+  const handlePrintReport = () => {
+    window.print();
+  };
+
+  const handleDownloadHtml = () => {
+    const htmlContent = generateSoieReportHtml({
+      submissionData,
+      assignmentData,
+      round,
+      sampleColor: color || assignmentData?.color || '-',
+      sampleGivenFitDate: formatDisplayDate(givenForFitDate),
+      sampleReceivedDate: formatDisplayDate(receivedDate),
+      commentsDate: formatDisplayDate(commentsReceivedDate),
+      fitBeforeWash: beforeWash,
+      fitAfterWash: afterWash,
+      commentsFabricTrims: fabricTrims,
+      attachments
+    });
+
+    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const styleNo = (submissionData?.style_number || 'Style').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const model = (assignmentData?.model_name || 'Model').replace(/[^a-zA-Z0-9_-]/g, '_');
+    a.download = `SOIE_Feedback_Round${round}_${styleNo}_${model}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success('Downloaded feedback report file!');
+  };
+
+  const handleCopyReportText = () => {
+    const roundOrd = getRoundOrdinal(round);
+    const model = assignmentData?.model_name || 'Model';
+    const styleNo = submissionData?.style_number || '-';
+    const desc = submissionData?.description || '-';
+    const sz = assignmentData?.size || '-';
+    const clr = color || assignmentData?.color || '-';
+    const givenDate = formatDisplayDate(givenForFitDate);
+    const recDate = formatDisplayDate(receivedDate);
+    const commDate = formatDisplayDate(commentsReceivedDate);
+
+    const textReport = `SOIE FIT AUDIT • ${roundOrd} ROUND EVALUATION
+Quality Feedback Update
+Model: ${model}
+
+Model Name: ${model}
+Type of Sample: ${submissionData?.type_of_sample || '1st Fit Sample'}
+
+Sample Specifications:
+Style no: ${styleNo}
+Description: ${desc}
+Size: ${sz}
+Sample color: ${clr}
+Sample given for Fit date: ${givenDate}
+
+${getRoundName(round)} Fit & Wash Evaluation:
+Sample received date: ${recDate}
+Comments Date: ${commDate}
+Fit comments before wash: ${beforeWash || 'No remarks noted'}
+Fit comments after wash: ${afterWash || 'No remarks noted'}
+Comments on fabric / trims: ${fabricTrims || 'No remarks noted'}
+
+"Thanks for your feedback. Your valuable feedback is essential for our continuous improvement and service excellence."
+
+Warm regards,
+Deepika
+Lead Designer & Quality Audit Team
+SOIE • Ginza Industries Limited
+designer02@soie.in`;
+
+    navigator.clipboard.writeText(textReport);
+    toast.success('Feedback report copied to clipboard!');
+  };
+
   if (!supabaseUrl || !supabaseAnonKey) {
     return (
       <div className="max-w-2xl mx-auto p-4">
@@ -794,8 +1052,6 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const dateSentFormatted = givenForFitDate || 
     assignmentData?.given_for_fit_date || 
     assignmentData?.givenForFitDate || 
-    (submissionData?.created_at ? new Date(submissionData.created_at).toLocaleDateString('en-GB') : '') ||
-    (submissionData?.updatedAt ? new Date(submissionData.updatedAt.seconds * 1000).toLocaleDateString('en-GB') : '') ||
     '-';
 
   if (loading) {
@@ -829,53 +1085,198 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
 
   if (completed) {
     return (
-      <div className="max-w-lg mx-auto p-12 text-center bg-white rounded-xl shadow-lg border mt-10 space-y-6 animate-in zoom-in-95 duration-300">
-        <div className="h-20 w-20 bg-green-100 rounded-full flex items-center justify-center mx-auto">
-          <CheckCircle2 className="h-10 w-10 text-green-600" />
-        </div>
-        <div className="space-y-2">
-          <h2 className="text-2xl font-bold text-slate-900">Submission Successful!</h2>
-          <p className="text-slate-500 font-medium">Thank you! Your feedback for Round {round} has been saved.</p>
-          <p className="text-sm text-slate-400">The tracking sheet has been updated automatically.</p>
-        </div>
-        <div className="pt-4 border-t border-slate-100 italic text-xs text-slate-400">
-          You can safely close this tab now.
-        </div>
-        
-        {parseInt(round) < 5 && (
-          <Button 
-            onClick={handleSendNextRoundLink}
-            disabled={mailing}
-            className="w-full h-12 bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-100"
-          >
-            {mailing ? (
-              <Loader2 className="w-5 h-5 animate-spin mr-2" />
-            ) : (
-              <MessageSquare className="w-5 h-5 mr-2" />
-            )}
-            Email me Round {parseInt(round) + 1} Link
-          </Button>
-        )}
+      <div className="max-w-4xl mx-auto p-4 md:p-8 space-y-6 animate-in fade-in duration-300">
+        {/* Success Banner (Hidden during Print) */}
+        <div className="no-print bg-emerald-50 border border-emerald-200 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="flex items-start gap-4">
+            <div className="h-12 w-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+              <CheckCircle2 className="h-7 w-7" />
+            </div>
+            <div className="space-y-1">
+              <h2 className="text-xl font-bold text-emerald-950">Submission Successful!</h2>
+              <p className="text-sm text-emerald-800">
+                Thank you! Your feedback for <strong>{getRoundName(round)}</strong> has been recorded in the system.
+              </p>
+              <p className="text-xs text-emerald-700">
+                The tracking sheet and audit records have been updated automatically. You can save or print your feedback below before closing this tab.
+              </p>
+            </div>
+          </div>
 
-        <Button variant="outline" onClick={() => {
-          try {
-            window.close();
-            // Show alert if window.close() is blocked
-            setTimeout(() => {
-              alert("You can now close this tab manually.");
-            }, 500);
-          } catch (e) {
-            alert("Please close this browser tab.");
-          }
-        }} className="w-full h-12">
-          Close Tab
-        </Button>
+          {/* Quick Close Button */}
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <Button
+              variant="outline"
+              onClick={() => {
+                try {
+                  window.close();
+                  setTimeout(() => {
+                    alert("You can safely close this browser tab.");
+                  }, 400);
+                } catch (e) {
+                  alert("Please close this browser tab.");
+                }
+              }}
+              className="w-full md:w-auto border-emerald-300 hover:bg-emerald-100 text-emerald-900 text-xs h-10 px-4 font-medium"
+            >
+              Close Tab
+            </Button>
+          </div>
+        </div>
+
+        {/* Action Controls Toolbar (Hidden during Print) */}
+        <div className="no-print bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Badge className="bg-slate-900 text-white hover:bg-slate-800 px-3 py-1 text-xs font-semibold">
+              Quality Feedback Update
+            </Badge>
+            <span className="text-xs text-slate-500 hidden sm:inline">
+              Download your signed copy anytime
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={handlePrintReport}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs h-10 px-4 font-semibold shadow-sm flex items-center gap-2"
+            >
+              <Printer className="w-4 h-4" />
+              Download / Print PDF
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={handleDownloadHtml}
+              className="border-slate-300 text-slate-700 hover:bg-slate-50 text-xs h-10 px-3.5 flex items-center gap-1.5"
+            >
+              <Download className="w-4 h-4 text-slate-500" />
+              Save File (.html)
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={handleCopyReportText}
+              className="border-slate-300 text-slate-700 hover:bg-slate-50 text-xs h-10 px-3.5 flex items-center gap-1.5"
+            >
+              <Copy className="w-4 h-4 text-slate-500" />
+              Copy Text
+            </Button>
+
+            {parseInt(round) < 5 && (
+              <Button
+                variant="outline"
+                onClick={handleSendNextRoundLink}
+                disabled={mailing}
+                className="border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-xs h-10 px-3.5 flex items-center gap-1.5"
+              >
+                {mailing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                Email Round {parseInt(round) + 1} Link
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* The Exact Printable Feedback Report Card */}
+        <div className="soie-print-zone">
+          <SoieFeedbackReportCard
+            submissionData={submissionData}
+            assignmentData={assignmentData}
+            round={round}
+            sampleColor={color || assignmentData?.color || '-'}
+            sampleGivenFitDate={formatDisplayDate(givenForFitDate)}
+            sampleReceivedDate={formatDisplayDate(receivedDate)}
+            commentsDate={formatDisplayDate(commentsReceivedDate)}
+            fitBeforeWash={beforeWash}
+            fitAfterWash={afterWash}
+            commentsFabricTrims={fabricTrims}
+            attachments={attachments}
+          />
+        </div>
       </div>
     );
   }
 
   return (
     <div className="max-w-2xl mx-auto p-4 md:p-8 space-y-6">
+      {/* Existing Submission Notice Banner & Report Preview Toggle */}
+      {hasExistingSubmission && (
+        <div className="no-print bg-amber-50/90 border border-amber-200/80 rounded-2xl p-4 md:p-5 shadow-sm space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-bold text-amber-950">
+                  Feedback for {getRoundName(round)} has already been recorded
+                </p>
+                <p className="text-xs text-amber-800">
+                  You can view and download your signed Quality Feedback report anytime, or make changes and re-submit below.
+                </p>
+              </div>
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowReportPreview(!showReportPreview)}
+              className="border-amber-300 text-amber-950 hover:bg-amber-100/70 shrink-0 text-xs h-9 px-3.5 flex items-center gap-1.5 font-medium self-start sm:self-auto"
+            >
+              {showReportPreview ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              {showReportPreview ? 'Hide Report Preview' : 'View / Download Report'}
+            </Button>
+          </div>
+
+          {/* Expanded Report Preview & Actions */}
+          {showReportPreview && (
+            <div className="pt-3 border-t border-amber-200/60 space-y-4 animate-in fade-in duration-200">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={handlePrintReport}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs h-8 px-3 font-medium flex items-center gap-1.5 shadow-sm"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  Print / Download PDF
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleDownloadHtml}
+                  className="bg-white border-slate-300 text-slate-700 text-xs h-8 px-3 flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-500" />
+                  Save File (.html)
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleCopyReportText}
+                  className="bg-white border-slate-300 text-slate-700 text-xs h-8 px-3 flex items-center gap-1.5"
+                >
+                  <Copy className="w-3.5 h-3.5 text-slate-500" />
+                  Copy Text
+                </Button>
+              </div>
+
+              <div className="soie-print-zone">
+                <SoieFeedbackReportCard
+                  submissionData={submissionData}
+                  assignmentData={assignmentData}
+                  round={round}
+                  sampleColor={color || assignmentData?.color || '-'}
+                  sampleGivenFitDate={formatDisplayDate(givenForFitDate)}
+                  sampleReceivedDate={formatDisplayDate(receivedDate)}
+                  commentsDate={formatDisplayDate(commentsReceivedDate)}
+                  fitBeforeWash={beforeWash}
+                  fitAfterWash={afterWash}
+                  commentsFabricTrims={fabricTrims}
+                  attachments={attachments}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Header Image and Box */}
       <Card className="border-0 shadow-sm bg-white overflow-hidden">
         <a href="https://ibb.co/dsWLS09q" target="_blank" rel="noopener noreferrer" className="block outline-none">

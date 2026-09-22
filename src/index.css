@@ -128,3 +128,28 @@
     @apply font-sans;
     }
 }
+
+@media print {
+  /* Hide all app navigation, buttons, controls and notifications during printing */
+  .no-print, nav, header, footer, button, [role="status"], .toaster {
+    display: none !important;
+  }
+
+  body, html {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  #soie-feedback-report-card {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: 1px solid #EAD8D0 !important;
+    page-break-inside: avoid !important;
+  }
+}

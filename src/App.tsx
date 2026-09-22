@@ -12,6 +12,7 @@ import { FormTab } from './components/FormTab';
 import { ManageModelsTab } from './components/ManageModelsTab';
 import { HistoryTab } from './components/HistoryTab';
 import { ModelResponseView } from './components/ModelResponseView';
+import { GoogleSheetsSetupModal } from './components/GoogleSheetsSetupModal';
 import { Toaster } from './components/ui/sonner';
 import { supabase } from './lib/supabase';
 
@@ -117,11 +118,14 @@ export default function App() {
               referrerPolicy="no-referrer"
             />
           </a>
-          <div className="p-6 border-b">
-            <h1 className="text-2xl font-normal text-slate-900 tracking-tight">Sample Fit Request</h1>
-            <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-              Assign samples to models for fitting comments. Feedback is synced automatically.
-            </p>
+          <div className="p-6 border-b flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-normal text-slate-900 tracking-tight">Sample Fit Request</h1>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Assign samples to models for fitting comments. Feedback is synced automatically.
+              </p>
+            </div>
+            <GoogleSheetsSetupModal />
           </div>
           
           <Tabs value={activeTab} onValueChange={setActiveTab} className="bg-white">

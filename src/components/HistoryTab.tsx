@@ -9,6 +9,7 @@ import { Loader2, Search, ExternalLink, RefreshCw, Calendar, User, Tag, Plus, Ca
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { toast } from 'sonner';
+import { ImageZoomModal } from './ImageZoomModal';
 
 interface Submission {
   id: string;
@@ -57,12 +58,45 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
     return '-';
   };
 
+  const getRoundAttachments = (assignment: any, round: string): any[] => {
+    const rData = assignment[`round${round}`];
+    if (rData && Array.isArray(rData.attachments)) {
+      return rData.attachments;
+    }
+    return [];
+  };
+
   const getRoundAttachmentsCount = (assignment: any, round: string): number => {
     const rData = assignment[`round${round}`];
     if (rData && Array.isArray(rData.attachments)) {
       return rData.attachments.length;
     }
     return 0;
+  };
+
+  const [zoomModalOpen, setZoomModalOpen] = useState(false);
+  const [zoomImages, setZoomImages] = useState<Array<{ id?: string; name?: string; url: string; size?: number; type?: string }>>([]);
+  const [zoomIndex, setZoomIndex] = useState(0);
+
+  const handleViewRoundPhotos = (assignment: any, round: string) => {
+    const atts = getRoundAttachments(assignment, round);
+    const imgs = atts
+      .filter((a: any) => (a.dataUrl || a.url) && (!a.type || a.type.startsWith('image/')))
+      .map((a: any, idx: number) => ({
+        id: a.id || `photo-${idx}`,
+        name: a.name || `${assignment.model_name || 'Model'} - Round ${round} Photo`,
+        url: a.dataUrl || a.url,
+        size: a.size,
+        type: a.type
+      }));
+
+    if (imgs.length > 0) {
+      setZoomImages(imgs);
+      setZoomIndex(0);
+      setZoomModalOpen(true);
+    } else {
+      toast.info(`No previewable image attachments found for Round ${round}.`);
+    }
   };
 
   const fetchSubmissions = async () => {
@@ -370,10 +404,18 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                                               <span className="inline-flex items-center gap-1 justify-center">
                                                 <span>{getRoundColor(a, '1')}</span>
                                                 {getRoundAttachmentsCount(a, '1') > 0 && (
-                                                  <span title={`${getRoundAttachmentsCount(a, '1')} photo(s) attached`} className="inline-flex items-center text-indigo-600 bg-indigo-100 rounded px-1 py-0.2 text-[8px] font-bold">
+                                                  <button 
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      handleViewRoundPhotos(a, '1');
+                                                    }}
+                                                    title={`Click to zoom ${getRoundAttachmentsCount(a, '1')} photo(s)`} 
+                                                    className="inline-flex items-center text-indigo-700 bg-indigo-100 hover:bg-indigo-200 border border-indigo-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
+                                                  >
                                                     <Camera className="w-2.5 h-2.5 mr-0.5" />
                                                     {getRoundAttachmentsCount(a, '1')}
-                                                  </span>
+                                                  </button>
                                                 )}
                                               </span>
                                             </TableCell>
@@ -384,10 +426,18 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                                               <span className="inline-flex items-center gap-1 justify-center">
                                                 <span>{getRoundColor(a, '2')}</span>
                                                 {getRoundAttachmentsCount(a, '2') > 0 && (
-                                                  <span title={`${getRoundAttachmentsCount(a, '2')} photo(s) attached`} className="inline-flex items-center text-amber-700 bg-amber-100 rounded px-1 py-0.2 text-[8px] font-bold">
+                                                  <button 
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      handleViewRoundPhotos(a, '2');
+                                                    }}
+                                                    title={`Click to zoom ${getRoundAttachmentsCount(a, '2')} photo(s)`} 
+                                                    className="inline-flex items-center text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
+                                                  >
                                                     <Camera className="w-2.5 h-2.5 mr-0.5" />
                                                     {getRoundAttachmentsCount(a, '2')}
-                                                  </span>
+                                                  </button>
                                                 )}
                                               </span>
                                             </TableCell>
@@ -398,10 +448,18 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                                               <span className="inline-flex items-center gap-1 justify-center">
                                                 <span>{getRoundColor(a, '3')}</span>
                                                 {getRoundAttachmentsCount(a, '3') > 0 && (
-                                                  <span title={`${getRoundAttachmentsCount(a, '3')} photo(s) attached`} className="inline-flex items-center text-emerald-700 bg-emerald-100 rounded px-1 py-0.2 text-[8px] font-bold">
+                                                  <button 
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      handleViewRoundPhotos(a, '3');
+                                                    }}
+                                                    title={`Click to zoom ${getRoundAttachmentsCount(a, '3')} photo(s)`} 
+                                                    className="inline-flex items-center text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
+                                                  >
                                                     <Camera className="w-2.5 h-2.5 mr-0.5" />
                                                     {getRoundAttachmentsCount(a, '3')}
-                                                  </span>
+                                                  </button>
                                                 )}
                                               </span>
                                             </TableCell>
@@ -412,10 +470,18 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                                               <span className="inline-flex items-center gap-1 justify-center">
                                                 <span>{getRoundColor(a, '4')}</span>
                                                 {getRoundAttachmentsCount(a, '4') > 0 && (
-                                                  <span title={`${getRoundAttachmentsCount(a, '4')} photo(s) attached`} className="inline-flex items-center text-purple-700 bg-purple-100 rounded px-1 py-0.2 text-[8px] font-bold">
+                                                  <button 
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      handleViewRoundPhotos(a, '4');
+                                                    }}
+                                                    title={`Click to zoom ${getRoundAttachmentsCount(a, '4')} photo(s)`} 
+                                                    className="inline-flex items-center text-purple-800 bg-purple-100 hover:bg-purple-200 border border-purple-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
+                                                  >
                                                     <Camera className="w-2.5 h-2.5 mr-0.5" />
                                                     {getRoundAttachmentsCount(a, '4')}
-                                                  </span>
+                                                  </button>
                                                 )}
                                               </span>
                                             </TableCell>
@@ -426,10 +492,18 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                                               <span className="inline-flex items-center gap-1 justify-center">
                                                 <span>{getRoundColor(a, '5')}</span>
                                                 {getRoundAttachmentsCount(a, '5') > 0 && (
-                                                  <span title={`${getRoundAttachmentsCount(a, '5')} photo(s) attached`} className="inline-flex items-center text-rose-700 bg-rose-100 rounded px-1 py-0.2 text-[8px] font-bold">
+                                                  <button 
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      handleViewRoundPhotos(a, '5');
+                                                    }}
+                                                    title={`Click to zoom ${getRoundAttachmentsCount(a, '5')} photo(s)`} 
+                                                    className="inline-flex items-center text-rose-800 bg-rose-100 hover:bg-rose-200 border border-rose-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
+                                                  >
                                                     <Camera className="w-2.5 h-2.5 mr-0.5" />
                                                     {getRoundAttachmentsCount(a, '5')}
-                                                  </span>
+                                                  </button>
                                                 )}
                                               </span>
                                             </TableCell>
@@ -450,6 +524,14 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Full-screen photo zoom modal */}
+      <ImageZoomModal
+        isOpen={zoomModalOpen}
+        onClose={() => setZoomModalOpen(false)}
+        images={zoomImages}
+        initialIndex={zoomIndex}
+      />
     </div>
   );
 }

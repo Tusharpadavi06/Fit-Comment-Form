@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
+import { ZoomIn, Maximize2 } from 'lucide-react';
+import { ImageZoomModal } from './ImageZoomModal';
 
 export interface AttachmentItem {
   id: string;
@@ -99,6 +101,27 @@ export function SoieFeedbackReportCard({
   const description = submissionData?.description || '-';
   const size = assignmentData?.size || '-';
   const color = sampleColor || assignmentData?.color || '-';
+
+  const [zoomModalOpen, setZoomModalOpen] = useState(false);
+  const [zoomIndex, setZoomIndex] = useState(0);
+
+  const zoomableImages = useMemo(() => {
+    return attachments
+      .filter((a) => (a.dataUrl || a.url) && (!a.type || a.type.startsWith('image/')))
+      .map((a) => ({
+        id: a.id,
+        name: a.name,
+        url: (a.dataUrl || a.url)!,
+        size: a.size,
+        type: a.type
+      }));
+  }, [attachments]);
+
+  const handleOpenZoom = (attIdOrUrl: string) => {
+    const idx = zoomableImages.findIndex((img) => img.id === attIdOrUrl || img.url === attIdOrUrl);
+    setZoomIndex(idx >= 0 ? idx : 0);
+    setZoomModalOpen(true);
+  };
 
   return (
     <div 
@@ -246,14 +269,38 @@ export function SoieFeedbackReportCard({
                   </td>
                   <td className="py-2.5 px-3.5 text-[#332228] align-top">
                     <div className="flex flex-wrap gap-2">
-                      {attachments.map((att, idx) => (
-                        <div key={att.id || idx} className="border border-slate-200 rounded p-1 bg-slate-50 text-[11px] flex items-center gap-1.5">
-                          {att.dataUrl && att.type.startsWith('image/') ? (
-                            <img src={att.dataUrl} alt={att.name} className="w-8 h-8 object-cover rounded" />
-                          ) : null}
-                          <span className="truncate max-w-[140px] font-medium text-slate-700">{att.name}</span>
-                        </div>
-                      ))}
+                      {attachments.map((att, idx) => {
+                        const isImg = (att.dataUrl || att.url) && (!att.type || att.type.startsWith('image/'));
+                        return (
+                          <div 
+                            key={att.id || idx} 
+                            onClick={() => {
+                              if (isImg) {
+                                handleOpenZoom(att.id || att.dataUrl || att.url || '');
+                              }
+                            }}
+                            className={`border border-slate-200 rounded p-1 bg-slate-50 text-[11px] flex items-center gap-1.5 transition-all ${
+                              isImg ? 'cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/50 hover:shadow-xs group' : ''
+                            }`}
+                            title={isImg ? `Click to Zoom ${att.name}` : att.name}
+                          >
+                            {isImg ? (
+                              <div className="relative w-8 h-8 rounded overflow-hidden shrink-0 bg-slate-200">
+                                <img src={att.dataUrl || att.url} alt={att.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
+                                <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                                  <ZoomIn className="w-3 h-3" />
+                                </div>
+                              </div>
+                            ) : null}
+                            <span className="truncate max-w-[130px] font-medium text-slate-700">{att.name}</span>
+                            {isImg && (
+                              <span className="text-[9px] bg-indigo-100 text-indigo-700 px-1 py-0.2 rounded font-semibold shrink-0">
+                                Zoom
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </td>
                 </tr>
@@ -285,6 +332,14 @@ export function SoieFeedbackReportCard({
       <div className="py-3 px-6 bg-[#381523] text-[#D8BAC5] text-[11px] text-center leading-normal">
         This is an automated quality feedback notification from SOIE Design Studio &bull; Ginza Industries Ltd.
       </div>
+
+      {/* Instant Zoom Modal */}
+      <ImageZoomModal
+        isOpen={zoomModalOpen}
+        onClose={() => setZoomModalOpen(false)}
+        images={zoomableImages}
+        initialIndex={zoomIndex}
+      />
     </div>
   );
 }

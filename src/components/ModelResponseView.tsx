@@ -8,10 +8,11 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Badge } from './ui/badge';
-import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare, UploadCloud, X, FileText, Paperclip, Download, Copy, Send, Printer, Eye, EyeOff } from 'lucide-react';
+import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare, UploadCloud, X, FileText, Paperclip, Download, Copy, Send, Printer, Eye, EyeOff, ZoomIn, Maximize2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
 import { getSeriesFromStyleNumber, getDeterministicId } from '../lib/series-utils';
+import { ImageZoomModal } from './ImageZoomModal';
 import { 
   SoieFeedbackReportCard, 
   generateSoieReportHtml, 
@@ -284,7 +285,7 @@ const getInitialFeedbackData = (sIdProp: string, aIdProp: string) => {
           style_number: styleNo || initialSub?.style_number || '',
           type_of_sample: sampleType || initialSub?.type_of_sample || '',
           description: initialSub?.description || '',
-          series: initialSub?.series || 'General',
+          series: initialSub?.series || getSeriesFromStyleNumber(styleNo || sId) || 'General',
           ...initialSub
         };
       }
@@ -300,6 +301,28 @@ const getInitialFeedbackData = (sIdProp: string, aIdProp: string) => {
           ...initialAss
         };
       }
+
+      // 5. Always synthesize optimistic objects if sId or aId exist so the form NEVER blocks on initial render
+      if (!initialSub && sId) {
+        initialSub = {
+          id: sId,
+          style_number: styleNo || sId,
+          type_of_sample: sampleType || 'Sample Fit',
+          description: '',
+          series: getSeriesFromStyleNumber(styleNo || sId) || 'General'
+        };
+      }
+      if (!initialAss && aId) {
+        initialAss = {
+          id: aId,
+          submission_id: sId,
+          model_name: modelName || 'Model',
+          model_email: modelEmail || '',
+          size: size || '',
+          color: colorParam || '',
+          given_for_fit_date: givenDate || ''
+        };
+      }
     } catch (e) {}
   }
 
@@ -310,11 +333,16 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const initialData = React.useMemo(() => getInitialFeedbackData(submissionId, assignmentId), [submissionId, assignmentId]);
   const [submissionData, setSubmissionData] = useState<any>(initialData.initialSub);
   const [assignmentData, setAssignmentData] = useState<any>(initialData.initialAss);
-  const [loading, setLoading] = useState<boolean>(!initialData.initialSub || !initialData.initialAss);
+  const [loading, setLoading] = useState<boolean>(!initialData.initialSub && !initialData.initialAss);
+  const [isSyncing, setIsSyncing] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [mailing, setMailing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Zoom modal state for full-screen photo viewing
+  const [zoomModalOpen, setZoomModalOpen] = useState(false);
+  const [zoomModalIndex, setZoomModalIndex] = useState(0);
 
   // Form states
   const [receivedDate, setReceivedDate] = useState('');
@@ -328,6 +356,25 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [hasExistingSubmission, setHasExistingSubmission] = useState(false);
   const [showReportPreview, setShowReportPreview] = useState(false);
+
+  // Filter zoomable images from attachments
+  const zoomableImages = React.useMemo(() => {
+    return attachments
+      .filter((a) => (a.dataUrl || (a as any).url) && (!a.type || a.type.startsWith('image/')))
+      .map((a) => ({
+        id: a.id,
+        name: a.name,
+        url: a.dataUrl || (a as any).url || '',
+        size: a.size,
+        type: a.type
+      }));
+  }, [attachments]);
+
+  const handleOpenZoom = (attIdOrUrl: string) => {
+    const idx = zoomableImages.findIndex((img) => img.id === attIdOrUrl || img.url === attIdOrUrl);
+    setZoomModalIndex(idx >= 0 ? idx : 0);
+    setZoomModalOpen(true);
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -490,17 +537,28 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           return Promise.race([worker(), timeout]);
         };
 
-        // Run Supabase and Firestore in parallel
-        const [sbResult, fsResult] = await Promise.allSettled([
-          fetchSupabase(),
-          fetchFirestore()
-        ]);
+        // Step 1: Query Supabase first (lightning fast, single roundtrip)
+        let subData: any = null;
+        let assData: any = null;
 
-        const sbData = sbResult.status === 'fulfilled' ? sbResult.value : null;
-        const fsData = fsResult.status === 'fulfilled' ? fsResult.value : null;
+        const sbData = await fetchSupabase();
+        if (sbData) {
+          subData = sbData.sub;
+          assData = sbData.ass;
+        }
 
-        let subData: any = sbData?.sub || fsData?.sub || initialData.initialSub;
-        let assData: any = sbData?.ass || fsData?.ass || initialData.initialAss;
+        // Step 2: Only query Firestore if Supabase didn't find both records
+        if (!subData || !assData) {
+          const fsData = await fetchFirestore();
+          if (fsData) {
+            if (!subData) subData = fsData.sub;
+            if (!assData) assData = fsData.ass;
+          }
+        }
+
+        // Fallback to optimistic initialData
+        if (!subData) subData = initialData.initialSub;
+        if (!assData) assData = initialData.initialAss;
 
         if (!isMounted) return;
 
@@ -508,7 +566,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         if (subData) {
           subData.style_number = subData.style_number || subData.styleNo || subData.styleNumber;
           subData.type_of_sample = subData.type_of_sample || subData.sampleType || subData.typeOfSample;
-          setSubmissionData(subData);
+          setSubmissionData((prev: any) => ({ ...prev, ...subData }));
 
           try {
             localStorage.setItem(`fit_cache_sub_${sId}`, JSON.stringify(subData));
@@ -522,7 +580,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           assData.model_name = assData.model_name || assData.modelName;
           assData.model_email = assData.model_email || assData.modelEmail;
           assData.given_for_fit_date = assData.given_for_fit_date || assData.givenForFitDate || '';
-          setAssignmentData(assData);
+          setAssignmentData((prev: any) => ({ ...prev, ...assData }));
 
           try {
             localStorage.setItem(`fit_cache_ass_${aId}`, JSON.stringify(assData));
@@ -541,7 +599,10 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       } catch (error) {
         console.error("Critical fetch error:", error);
       } finally {
-        if (isMounted) setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+          setIsSyncing(false);
+        }
       }
     };
 
@@ -896,18 +957,28 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       const modelFeedbackBaseUrl = appBaseUrl;
       console.log("ModelView: Final base URL for links:", modelFeedbackBaseUrl);
       
+      // Pre-baked query params for 0ms instantaneous loading without waiting for network
+      const styleParam = encodeURIComponent(submissionData.style_number || submissionData.styleNo || '');
+      const sampleParam = encodeURIComponent(submissionData.type_of_sample || submissionData.sampleType || '');
+      const nameParam = encodeURIComponent(assignmentData.model_name || assignmentData.modelName || '');
+      const emailParam = encodeURIComponent(assignmentData.model_email || assignmentData.modelEmail || '');
+      const sizeParam = encodeURIComponent(assignmentData.size || '');
+      const colorParam = encodeURIComponent(color || assignmentData.color || '');
+      const givenParam = encodeURIComponent(givenForFitDate || '');
+      const fastParams = `&styleNo=${styleParam}&sampleType=${sampleParam}&modelName=${nameParam}&modelEmail=${emailParam}&size=${sizeParam}&color=${colorParam}&givenDate=${givenParam}`;
+
       // Links for the Google Sheet
-      const resR1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=1`;
-      const resR2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=2`;
-      const resR3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=3`;
-      const resR4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=4`;
-      const resR5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=5`;
+      const resR1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=1${fastParams}`;
+      const resR2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=2${fastParams}`;
+      const resR3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=3${fastParams}`;
+      const resR4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=4${fastParams}`;
+      const resR5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${aId}&round=5${fastParams}`;
       
-      const adminEditR1Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=1`;
-      const adminEditR2Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=2`;
-      const adminEditR3Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=3`;
-      const adminEditR4Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=4`;
-      const adminEditR5Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=5`;
+      const adminEditR1Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=1${fastParams}`;
+      const adminEditR2Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=2${fastParams}`;
+      const adminEditR3Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=3${fastParams}`;
+      const adminEditR4Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=4${fastParams}`;
+      const adminEditR5Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=5${fastParams}`;
 
       const series = getSeriesFromStyleNumber(submissionData.style_number || submissionData.styleNo || "");
       const collage = await generateCollageAttachment(attachments);
@@ -1076,7 +1147,17 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       
       const modelFeedbackBaseUrl = appBaseUrl;
       console.log("ModelView: Mail generation base URL:", modelFeedbackBaseUrl);
-      const nextRoundLink = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${assignmentId}&round=${nextRound}`;
+
+      const styleParam = encodeURIComponent(submissionData.style_number || submissionData.styleNo || '');
+      const sampleParam = encodeURIComponent(submissionData.type_of_sample || submissionData.sampleType || '');
+      const nameParam = encodeURIComponent(assignmentData.model_name || assignmentData.modelName || '');
+      const emailParam = encodeURIComponent(assignmentData.model_email || assignmentData.modelEmail || '');
+      const sizeParam = encodeURIComponent(assignmentData.size || '');
+      const colorParam = encodeURIComponent(color || assignmentData.color || '');
+      const givenParam = encodeURIComponent(givenForFitDate || '');
+      const fastParams = `&styleNo=${styleParam}&sampleType=${sampleParam}&modelName=${nameParam}&modelEmail=${emailParam}&size=${sizeParam}&color=${colorParam}&givenDate=${givenParam}`;
+
+      const nextRoundLink = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${assignmentId}&round=${nextRound}${fastParams}`;
       
       const mailPayload = {
         type: 'SEND_MAIL',
@@ -1358,6 +1439,12 @@ designer02@soie.in`;
 
   return (
     <div className="max-w-2xl mx-auto p-4 md:p-8 space-y-6">
+      {/* Non-blocking background sync indicator */}
+      {isSyncing && (
+        <div className="fixed top-0 left-0 right-0 h-1 bg-indigo-100/70 overflow-hidden z-50 pointer-events-none" title="Syncing fresh updates...">
+          <div className="h-full bg-indigo-600 animate-pulse w-full" />
+        </div>
+      )}
       {/* Existing Submission Notice Banner & Report Preview Toggle */}
       {hasExistingSubmission && (
         <div className="no-print bg-amber-50/90 border border-amber-200/80 rounded-2xl p-4 md:p-5 shadow-sm space-y-3">
@@ -1656,48 +1743,75 @@ designer02@soie.in`;
               {/* Attachment Preview Grid */}
               {attachments.length > 0 && (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 pt-2">
-                  {attachments.map((att) => (
-                    <div 
-                      key={att.id} 
-                      className="relative group rounded-lg border border-slate-200 bg-white overflow-hidden shadow-sm flex flex-col"
-                    >
-                      {att.type.startsWith('image/') ? (
-                        <div className="h-28 w-full bg-slate-100 overflow-hidden relative">
-                          <img 
-                            src={att.dataUrl} 
-                            alt={att.name} 
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                      ) : (
-                        <div className="h-28 w-full bg-slate-50 flex flex-col items-center justify-center p-2 text-slate-400">
-                          <FileText className="w-8 h-8 text-primary/70 mb-1" />
-                          <span className="text-[10px] font-mono uppercase font-bold text-slate-500">PDF Document</span>
-                        </div>
-                      )}
-                      <div className="p-2 flex flex-col justify-between flex-1 bg-white">
-                        <p className="text-[11px] font-medium text-slate-700 truncate" title={att.name}>
-                          {att.name}
-                        </p>
-                        <p className="text-[10px] text-slate-400">
-                          {att.size < 1024 * 1024 
-                            ? `${Math.round(att.size / 1024)} KB` 
-                            : `${(att.size / (1024 * 1024)).toFixed(1)} MB`}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeAttachment(att.id);
+                  {attachments.map((att) => {
+                    const isImg = (att.dataUrl || (att as any).url) && (!att.type || att.type.startsWith('image/'));
+                    return (
+                      <div 
+                        key={att.id} 
+                        onClick={() => {
+                          if (isImg) {
+                            handleOpenZoom(att.id || att.dataUrl || (att as any).url || '');
+                          }
                         }}
-                        className="absolute top-1 right-1 h-6 w-6 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-destructive transition-colors shadow-sm"
-                        title="Remove attachment"
+                        className={`relative group rounded-lg border border-slate-200 bg-white overflow-hidden shadow-sm flex flex-col transition-all ${
+                          isImg ? 'cursor-pointer hover:border-indigo-400 hover:shadow-md' : ''
+                        }`}
                       >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
+                        {isImg ? (
+                          <div className="h-28 w-full bg-slate-100 overflow-hidden relative group">
+                            <img 
+                              src={att.dataUrl || (att as any).url} 
+                              alt={att.name} 
+                              className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-200"
+                            />
+                            {/* Hover overlay indicating click to zoom */}
+                            <div className="absolute inset-0 bg-slate-950/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-white">
+                              <ZoomIn className="w-5 h-5 text-indigo-200" />
+                              <span className="text-xs font-semibold drop-shadow-xs">Click to Zoom</span>
+                            </div>
+                            <div className="absolute bottom-1 left-1 bg-black/60 backdrop-blur-xs text-white rounded px-1.5 py-0.5 text-[9px] flex items-center gap-1 font-medium pointer-events-none">
+                              <Maximize2 className="w-2.5 h-2.5" />
+                              Zoom
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="h-28 w-full bg-slate-50 flex flex-col items-center justify-center p-2 text-slate-400">
+                            <FileText className="w-8 h-8 text-primary/70 mb-1" />
+                            <span className="text-[10px] font-mono uppercase font-bold text-slate-500">PDF Document</span>
+                          </div>
+                        )}
+                        <div className="p-2 flex flex-col justify-between flex-1 bg-white">
+                          <p className="text-[11px] font-medium text-slate-700 truncate" title={att.name}>
+                            {att.name}
+                          </p>
+                          <p className="text-[10px] text-slate-400 flex items-center justify-between">
+                            <span>
+                              {att.size < 1024 * 1024 
+                                ? `${Math.round(att.size / 1024)} KB` 
+                                : `${(att.size / (1024 * 1024)).toFixed(1)} MB`}
+                            </span>
+                            {isImg && (
+                              <span className="text-indigo-600 font-semibold text-[9px] flex items-center gap-0.5">
+                                <ZoomIn className="w-2.5 h-2.5" />
+                                HD Zoom
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeAttachment(att.id);
+                          }}
+                          className="absolute top-1 right-1 h-6 w-6 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-destructive transition-colors shadow-sm z-10"
+                          title="Remove attachment"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1719,6 +1833,14 @@ designer02@soie.in`;
           )}
         </Button>
       </form>
+
+      {/* Full-screen photo zoom modal for attachments */}
+      <ImageZoomModal
+        isOpen={zoomModalOpen}
+        onClose={() => setZoomModalOpen(false)}
+        images={zoomableImages}
+        initialIndex={zoomModalIndex}
+      />
     </div>
   );
 }

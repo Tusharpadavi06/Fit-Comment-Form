@@ -62,3 +62,36 @@ export function getSeriesFromStyleNumber(styleNo: string): string {
 
   return "General";
 }
+
+/**
+ * Generates a stable deterministic UUID from a submissionId and modelEmail.
+ * Ensures consistent assignment matching across devices, rounds, and databases.
+ */
+export function getDeterministicId(subId: string, email: string): string {
+  if (!subId || !email) {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+  
+  const seed = `${subId}_${email.toLowerCase().trim()}`;
+  
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0, ch; i < seed.length; i++) {
+    ch = seed.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  
+  const hex1 = (h1 >>> 0).toString(16).padStart(8, '0');
+  const hex2 = (h2 >>> 0).toString(16).padStart(8, '0');
+  const hex3 = ((h1 ^ 0x6E616E6F) >>> 0).toString(16).padStart(8, '0');
+  const hex4 = ((h2 ^ 0x62756C6C) >>> 0).toString(16).padStart(8, '0');
+  
+  const fullHex = (hex1 + hex2 + hex3 + hex4).substring(0, 32);
+  
+  return `${fullHex.slice(0, 8)}-${fullHex.slice(8, 12)}-${fullHex.slice(12, 16)}-${fullHex.slice(16, 20)}-${fullHex.slice(20, 32)}`;
+}

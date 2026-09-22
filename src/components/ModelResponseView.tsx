@@ -11,7 +11,7 @@ import { Badge } from './ui/badge';
 import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare, UploadCloud, X, FileText, Paperclip, Download, Copy, Send, Printer, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
-import { getSeriesFromStyleNumber } from '../lib/series-utils';
+import { getSeriesFromStyleNumber, getDeterministicId } from '../lib/series-utils';
 import { 
   SoieFeedbackReportCard, 
   generateSoieReportHtml, 
@@ -205,10 +205,112 @@ interface ModelResponseViewProps {
   round: string;
 }
 
+// Helper to retrieve cached or URL-based initial data synchronously (0ms load)
+const getInitialFeedbackData = (sIdProp: string, aIdProp: string) => {
+  let initialSub: any = null;
+  let initialAss: any = null;
+  const sId = (sIdProp || '').trim();
+  let aId = (aIdProp || '').trim();
+  if (aId.startsWith('new-')) aId = aId.substring(4);
+  aId = aId.replace(/--/g, '-');
+
+  if (typeof window !== 'undefined') {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const styleNo = urlParams.get('styleNo') || urlParams.get('style_number');
+      const sampleType = urlParams.get('sampleType') || urlParams.get('type_of_sample');
+      const modelName = urlParams.get('modelName') || urlParams.get('name');
+      const modelEmail = urlParams.get('modelEmail') || urlParams.get('email');
+      const size = urlParams.get('size');
+      const colorParam = urlParams.get('color');
+      const givenDate = urlParams.get('givenDate') || urlParams.get('date');
+
+      // 1. Check local key-value caches
+      const cachedSubStr = localStorage.getItem(`fit_cache_sub_${sId}`);
+      if (cachedSubStr) {
+        initialSub = JSON.parse(cachedSubStr);
+      }
+      const cachedAssStr = localStorage.getItem(`fit_cache_ass_${aId}`);
+      if (cachedAssStr) {
+        initialAss = JSON.parse(cachedAssStr);
+      }
+      
+      // 2. Check assignment list cache for this submission
+      if (!initialAss && sId) {
+        const cachedListStr = localStorage.getItem(`fit_cache_ass_list_${sId}`);
+        if (cachedListStr) {
+          const list = JSON.parse(cachedListStr);
+          if (Array.isArray(list) && list.length > 0) {
+            const cleanAId = aId.toLowerCase();
+            initialAss = list.find((a: any) =>
+              a.id === aId ||
+              getDeterministicId(sId, a.model_email || a.modelEmail || '') === aId ||
+              (a.model_email && cleanAId.includes(a.model_email.toLowerCase().split('@')[0])) ||
+              (a.model_name && cleanAId.includes(a.model_name.toLowerCase().replace(/\s/g, '')))
+            );
+            if (!initialAss && list.length === 1) initialAss = list[0];
+          }
+        }
+      }
+
+      // 3. Check full submissions list cache
+      if (!initialSub || !initialAss) {
+        const fullCacheStr = localStorage.getItem('fit_submissions_cache');
+        if (fullCacheStr) {
+          const fullList = JSON.parse(fullCacheStr);
+          if (Array.isArray(fullList)) {
+            const foundSub = fullList.find((s: any) => s.id === sId || s.style_number === sId);
+            if (foundSub) {
+              if (!initialSub) initialSub = foundSub;
+              if (!initialAss && foundSub.assignments) {
+                const cleanAId = aId.toLowerCase();
+                initialAss = foundSub.assignments.find((a: any) =>
+                  a.id === aId ||
+                  getDeterministicId(sId, a.model_email || a.modelEmail || '') === aId ||
+                  (a.model_email && cleanAId.includes(a.model_email.toLowerCase().split('@')[0])) ||
+                  (a.model_name && cleanAId.includes(a.model_name.toLowerCase().replace(/\s/g, '')))
+                );
+                if (!initialAss && foundSub.assignments.length === 1) initialAss = foundSub.assignments[0];
+              }
+            }
+          }
+        }
+      }
+
+      // 4. If URL has query parameters, synthesize or enhance initial values
+      if (styleNo || sampleType) {
+        initialSub = {
+          id: sId,
+          style_number: styleNo || initialSub?.style_number || '',
+          type_of_sample: sampleType || initialSub?.type_of_sample || '',
+          description: initialSub?.description || '',
+          series: initialSub?.series || 'General',
+          ...initialSub
+        };
+      }
+      if (modelName || modelEmail || size || colorParam || givenDate) {
+        initialAss = {
+          id: aId,
+          submission_id: sId,
+          model_name: modelName || initialAss?.model_name || '',
+          model_email: modelEmail || initialAss?.model_email || '',
+          size: size || initialAss?.size || '',
+          color: colorParam || initialAss?.color || '',
+          given_for_fit_date: givenDate || initialAss?.given_for_fit_date || '',
+          ...initialAss
+        };
+      }
+    } catch (e) {}
+  }
+
+  return { initialSub, initialAss };
+};
+
 export function ModelResponseView({ submissionId, assignmentId, round }: ModelResponseViewProps) {
-  const [submissionData, setSubmissionData] = useState<any>(null);
-  const [assignmentData, setAssignmentData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const initialData = React.useMemo(() => getInitialFeedbackData(submissionId, assignmentId), [submissionId, assignmentId]);
+  const [submissionData, setSubmissionData] = useState<any>(initialData.initialSub);
+  const [assignmentData, setAssignmentData] = useState<any>(initialData.initialAss);
+  const [loading, setLoading] = useState<boolean>(!initialData.initialSub || !initialData.initialAss);
   const [submitting, setSubmitting] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [mailing, setMailing] = useState(false);
@@ -228,9 +330,11 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const [showReportPreview, setShowReportPreview] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
+
     const fetchData = async () => {
       if (!submissionId || !assignmentId) {
-        setLoading(false);
+        if (isMounted) setLoading(false);
         return;
       }
       
@@ -240,151 +344,178 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         
         // Sanitize aId - handle prefixes from old links and potential malformed characters
         if (aId.startsWith('new-')) aId = aId.substring(4);
-        
-        // Remove double hyphens if present (legacy bug fix)
         aId = aId.replace(/--/g, '-');
         
-        console.log("Fetching matching data for Style:", sId, "Assignment:", aId, "Round:", round);
+        console.log("[FastLoad] Fetching matching data for Style:", sId, "Assignment:", aId, "Round:", round);
         
         if (!sId || !aId) {
-          setError("Malformed link. Submission or Assignment ID missing.");
-          setLoading(false);
+          if (isMounted) {
+            setError("Malformed link. Submission or Assignment ID missing.");
+            setLoading(false);
+          }
           return;
         }
 
-        let subData: any = null;
-        let assData: any = null;
-
-      // 1. Try Firestore FIRST (Primary source in this env)
-      let firestoreFailed = false;
-      try {
-        console.log("Attempting Firestore fetch for:", sId, aId);
-        const subRef = doc(db, 'submissions', sId);
-        const assRef = doc(db, 'assignments', aId);
-        
-        const [subDoc, assDoc] = await Promise.all([
-          getDoc(subRef).catch(e => { console.warn("Firestore Sub error:", e); firestoreFailed = true; return null; }),
-          getDoc(assRef).catch(e => { console.warn("Firestore Ass error:", e); firestoreFailed = true; return null; })
-        ]);
-        
-        if (subDoc && subDoc.exists()) {
-          const d = subDoc.data();
-          subData = { id: subDoc.id, ...d };
-          console.log("Firestore submission found");
-        }
-        
-        if (assDoc && assDoc.exists()) {
-          const d = assDoc.data();
-          assData = { id: assDoc.id, ...d };
-          console.log("Firestore assignment found");
-        }
-
-        // 1b. Fallback query in Firestore if exact ID didn't match
-        if (!assData && sId) {
+        // 1. Supabase Fast Joined Fetcher (1 Network Trip)
+        const fetchSupabase = async () => {
           try {
-            const assQ = query(collection(db, 'assignments'), where('submission_id', '==', sId));
-            const snap = await getDocs(assQ);
-            if (!snap.empty) {
-              const allAss = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            if (!supabase) return null;
+            
+            // Joined query: pulls submission AND all related assignments in 1 fast roundtrip!
+            const { data: subWithAss } = await supabase
+              .from('submissions')
+              .select(`
+                *,
+                assignments(*)
+              `)
+              .eq('id', sId)
+              .maybeSingle();
+
+            if (subWithAss) {
+              const assignmentsList: any[] = subWithAss.assignments || [];
+              const sub = { ...subWithAss };
+              delete sub.assignments;
+
+              let matchedAss = assignmentsList.find((a: any) => a.id === aId);
+              if (!matchedAss && aId) {
+                const cleanAId = aId.toLowerCase();
+                matchedAss = assignmentsList.find((a: any) => 
+                  a.id === aId || 
+                  getDeterministicId(sId, a.model_email || a.modelEmail || '') === aId ||
+                  (a.model_email && cleanAId.includes(a.model_email.toLowerCase().split('@')[0])) ||
+                  (a.model_name && cleanAId.includes(a.model_name.toLowerCase().replace(/\s/g, '')))
+                );
+              }
+              if (!matchedAss && assignmentsList.length === 1) {
+                matchedAss = assignmentsList[0];
+              }
+              if (!matchedAss && assignmentsList.length > 0) {
+                matchedAss = assignmentsList[0];
+              }
+
+              return { sub, ass: matchedAss, allAss: assignmentsList };
+            }
+
+            // Fallback A: Lookup assignment directly by ID
+            if (aId) {
+              const { data: directAssList } = await supabase
+                .from('assignments')
+                .select('*')
+                .eq('id', aId)
+                .limit(1);
+
+              if (directAssList && directAssList.length > 0) {
+                const ass = directAssList[0];
+                const actualSubId = ass.submission_id || sId;
+                const { data: sub } = await supabase
+                  .from('submissions')
+                  .select('*')
+                  .eq('id', actualSubId)
+                  .maybeSingle();
+
+                return { sub: sub || null, ass, allAss: directAssList };
+              }
+            }
+
+            // Fallback B: If sId is a style number rather than UUID
+            const { data: subByStyle } = await supabase
+              .from('submissions')
+              .select('*, assignments(*)')
+              .eq('style_number', sId)
+              .maybeSingle();
+
+            if (subByStyle) {
+              const assignmentsList: any[] = subByStyle.assignments || [];
+              const sub = { ...subByStyle };
+              delete sub.assignments;
               const cleanAId = aId.toLowerCase();
-              assData = allAss.find((a: any) => 
+              const matchedAss = assignmentsList.find((a: any) => 
                 a.id === aId || 
+                getDeterministicId(sub.id, a.model_email || a.modelEmail || '') === aId ||
                 (a.model_email && cleanAId.includes(a.model_email.toLowerCase().split('@')[0])) ||
                 (a.model_name && cleanAId.includes(a.model_name.toLowerCase().replace(/\s/g, '')))
-              );
-              if (!assData && allAss.length === 1) {
-                assData = allAss[0];
-              }
-              if (assData) console.log("Firestore assignment found via fallback query");
+              ) || assignmentsList[0];
+
+              return { sub, ass: matchedAss, allAss: assignmentsList };
             }
           } catch (e: any) {
-            console.warn("Firestore fallback query error:", e.message);
+            console.warn("[FastLoad] Supabase query warning:", e.message);
           }
-        }
-      } catch (fe: any) {
-        console.warn("Firestore fetch issue (handled):", fe.message);
-        firestoreFailed = true;
-      }
+          return null;
+        };
 
-        // 2. Try Supabase if Firestore missed something or failed
-        if (!subData || !assData || firestoreFailed) {
-          try {
-            console.log("Checking Supabase for IDs:", sId, aId);
-            if (!subData) {
-              const { data: sList } = await supabase
-                .from('submissions')
-                .select('*')
-                .eq('id', sId)
-                .maybeSingle();
-              
-              if (sList) {
-                subData = sList;
-                console.log("Supabase submission found");
-              }
-            }
+        // 2. Firestore Concurrent Fetcher with strict 2.5s Timeout
+        const fetchFirestore = async () => {
+          if (!db) return null;
+          const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500));
+          
+          const worker = async () => {
+            try {
+              const subRef = doc(db, 'submissions', sId);
+              const assRef = doc(db, 'assignments', aId);
+              const [subDoc, assDoc] = await Promise.all([
+                getDoc(subRef).catch(() => null),
+                getDoc(assRef).catch(() => null)
+              ]);
 
-            if (!assData && aId) {
-              // Priority 1: Fetch by Assignment ID
-              console.log("Fetching assignment by ID:", aId);
-              try {
-                // Only try UUID lookup if it looks like a valid UUID (no crazy chars)
-                if (aId.length >= 32) {
-                  const { data: aList, error: aErr } = await supabase
-                    .from('assignments')
-                    .select('*')
-                    .eq('id', aId);
+              let sub = subDoc?.exists() ? { id: subDoc.id, ...subDoc.data() } : null;
+              let ass = assDoc?.exists() ? { id: assDoc.id, ...assDoc.data() } : null;
 
-                  if (aList && aList.length > 0) {
-                    assData = aList[0];
-                    console.log("Supabase assignment found by exact ID");
-                  }
+              if (!ass && sId) {
+                const assQ = query(collection(db, 'assignments'), where('submission_id', '==', sId));
+                const snap = await getDocs(assQ).catch(() => null);
+                if (snap && !snap.empty) {
+                  const allAss = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                  const cleanAId = aId.toLowerCase();
+                  ass = allAss.find((a: any) => 
+                    a.id === aId || 
+                    getDeterministicId(sId, a.model_email || a.modelEmail || '') === aId ||
+                    (a.model_email && cleanAId.includes(a.model_email.toLowerCase().split('@')[0])) ||
+                    (a.model_name && cleanAId.includes(a.model_name.toLowerCase().replace(/\s/g, '')))
+                  );
+                  if (!ass && allAss.length === 1) ass = allAss[0];
+                  if (!ass && allAss.length > 0) ass = allAss[0];
                 }
-              } catch (e: any) {
-                console.warn("Supabase assignment ID query failed (skipped to fallback):", e.message);
               }
 
-              // Priority 2: Fallback - Fetch by submission_id if we have it
-              if (!assData && sId) {
-                 console.log("Fallback: searching for assignment by submission_id:", sId);
-                 try {
-                   const { data: fallbackList } = await supabase
-                     .from('assignments')
-                     .select('*')
-                     .eq('submission_id', sId)
-                     .limit(50);
-                   
-                   if (fallbackList && fallbackList.length > 0) {
-                     // VERY aggressive match: by ID, or if any part of the name/email matches the aId string
-                     // This recovers data from legacy links that might be malformed
-                     const cleanAId = aId.toLowerCase();
-                     assData = fallbackList.find(a => 
-                        a.id === aId || 
-                        (a.model_email && cleanAId.includes(a.model_email.toLowerCase().split('@')[0])) ||
-                        (a.model_name && cleanAId.includes(a.model_name.toLowerCase().replace(/\s/g, '')))
-                     );
-                     
-                     // Absolute fallback: just take the first one if only one exists for this style
-                     if (!assData && fallbackList.length === 1) {
-                       assData = fallbackList[0];
-                     }
-                     
-                     if (assData) console.log("Supabase assignment found via submission fallback match");
-                   }
-                 } catch (fe: any) {
-                    console.warn("Supabase fallback exception:", fe.message);
-                 }
+              if (sub || ass) {
+                return { sub, ass };
               }
+            } catch (e: any) {
+              console.warn("[FastLoad] Firestore query warning:", e.message);
             }
-          } catch (se: any) {
-            console.warn("Supabase fetch exception (handled):", se.message);
-          }
-        }
-        
-        // Final fallback: Ensure keys are accessible via both snake_case and camelCase
+            return null;
+          };
+
+          return Promise.race([worker(), timeout]);
+        };
+
+        // Run Supabase and Firestore in parallel
+        const [sbResult, fsResult] = await Promise.allSettled([
+          fetchSupabase(),
+          fetchFirestore()
+        ]);
+
+        const sbData = sbResult.status === 'fulfilled' ? sbResult.value : null;
+        const fsData = fsResult.status === 'fulfilled' ? fsResult.value : null;
+
+        let subData: any = sbData?.sub || fsData?.sub || initialData.initialSub;
+        let assData: any = sbData?.ass || fsData?.ass || initialData.initialAss;
+
+        if (!isMounted) return;
+
+        // Ensure keys are accessible via both snake_case and camelCase
         if (subData) {
           subData.style_number = subData.style_number || subData.styleNo || subData.styleNumber;
           subData.type_of_sample = subData.type_of_sample || subData.sampleType || subData.typeOfSample;
           setSubmissionData(subData);
+
+          try {
+            localStorage.setItem(`fit_cache_sub_${sId}`, JSON.stringify(subData));
+            if (subData.id && subData.id !== sId) {
+              localStorage.setItem(`fit_cache_sub_${subData.id}`, JSON.stringify(subData));
+            }
+          } catch (e) {}
         }
         
         if (assData) {
@@ -392,19 +523,33 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           assData.model_email = assData.model_email || assData.modelEmail;
           assData.given_for_fit_date = assData.given_for_fit_date || assData.givenForFitDate || '';
           setAssignmentData(assData);
+
+          try {
+            localStorage.setItem(`fit_cache_ass_${aId}`, JSON.stringify(assData));
+            if (assData.id && assData.id !== aId) {
+              localStorage.setItem(`fit_cache_ass_${assData.id}`, JSON.stringify(assData));
+            }
+          } catch (e) {}
         }
 
-        if (!subData && !assData) {
-           setError("Data not found. Link may be invalid or not yet updated across databases.");
+        if (subData && assData) {
+          setError(null);
+        } else if (!subData && !assData) {
+          setError("Feedback form not found. Please verify the link or contact your coordinator.");
         }
 
       } catch (error) {
         console.error("Critical fetch error:", error);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
+
     fetchData();
+
+    return () => {
+      isMounted = false;
+    };
   }, [submissionId, assignmentId, round]);
 
   // Refactored Prefill Logic (Triggers when assignmentData is loaded)
@@ -710,6 +855,19 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           } else {
             console.log("Supabase Assignment Update with photos successful");
           }
+
+          // Cache submitted round locally for instant reopen
+          try {
+            const updatedAss = {
+              ...assignmentData,
+              [`round${round}`]: roundData,
+              [`round_${round}`]: roundData
+            };
+            localStorage.setItem(`fit_cache_ass_${aId}`, JSON.stringify(updatedAss));
+            if (targetAssId) {
+              localStorage.setItem(`fit_cache_ass_${targetAssId}`, JSON.stringify(updatedAss));
+            }
+          } catch (e) {}
         }
       } catch (suErr) {
         console.warn("Supabase round update exception:", suErr);
@@ -1031,7 +1189,7 @@ designer02@soie.in`;
     toast.success('Feedback report copied to clipboard!');
   };
 
-  if (!supabaseUrl || !supabaseAnonKey) {
+  if ((!supabaseUrl || !supabaseAnonKey) && !submissionData && !assignmentData && !loading) {
     return (
       <div className="max-w-2xl mx-auto p-4">
         <Card className="border-destructive/50 bg-destructive/5">
@@ -1041,7 +1199,7 @@ designer02@soie.in`;
               Configuration Missing
             </CardTitle>
             <CardDescription>
-              Supabase credentials are not set. The administrator needs to configure the application.
+              Database credentials are not set. The administrator needs to configure the application.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -1056,8 +1214,10 @@ designer02@soie.in`;
 
   if (loading) {
     return (
-      <div className="flex justify-center p-12">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      <div className="flex flex-col items-center justify-center min-h-[400px] p-8 space-y-3">
+        <Loader2 className="w-9 h-9 animate-spin text-primary" />
+        <p className="text-sm font-medium text-slate-600">Opening feedback form...</p>
+        <p className="text-xs text-slate-400">Loading details for Round {round}...</p>
       </div>
     );
   }

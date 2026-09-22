@@ -76,7 +76,16 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchModelPool();
+    const q = new URLSearchParams(window.location.search);
+    const sId = q.get('submissionId');
+    const aId = q.get('assignmentId');
+    const m = q.get('mode');
+    // Skip model pool fetching on model feedback links for fastest load
+    if (!sId || !aId || m === 'edit') {
+      fetchModelPool();
+    } else {
+      setLoadingModels(false);
+    }
   }, []);
 
   // Check for parameters in URL

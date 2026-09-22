@@ -1,6 +1,29 @@
 # Google Apps Script for SOIE Fit Comment System & Photos Sync
 
-This guide provides the complete, working code for **`Snapped.gs`** to fix photo thumbnails in Google Sheets (**Columns BI to BM**) and sync all comments.
+This guide provides the complete, working code for **`Snapped.gs`** to fix photo thumbnails in Google Sheets (**Columns BI to BM**), enable **Instant High-Res Zoom on Click (No Google Drive Folders!)**, and sync all comments.
+
+---
+
+## 🔍 NEW: Direct "Click-to-Zoom" Photo Viewer (Drive Open Hone Ki Jagah Zoom)
+
+Pehle Google Sheets me photo pe click karne se Google Drive ka folder ya file open hoti thi. 
+Ab naye **`Snapped.gs`** me 2 powerful zoom options hain:
+
+1. **Click on Cell -> Instant Zoom Lightbox:**
+   - Jab aap Column BI se BM me kisi bhi photo thumbnail pe click karenge, to Google Drive ka folder khulne ke bajay ek **High-Definition Photo Zoom Lightbox Viewer** open hoga.
+   - **Features:**
+     - 🔍 **Mousewheel Zoom:** Mouse scroll karke photo ko kitna bhi zoom-in ya zoom-out karein.
+     - ✋ **Drag to Pan:** Zoom karne ke baad photo ko drag karke har stitch, fabric seam aur detail dekhein.
+     - ⤢ **Fit to Screen & 1:1 HD:** 1 click me original high resolution view.
+     - ⟳ **Rotate Image:** Photo ko rotate kar sakte hain.
+     - 🖼️ **Bottom Thumbnail Strip:** Us round ke saare 1 se 10 photos neeche thumbnail strip me dikhte hain, kisi bhi photo pe click karke turant switch kar sakte hain.
+     - ❌ **No Google Drive UI:** Koi Drive login ya folder structure browse karne ki zarurat nahi!
+
+2. **Google Sheets ke Andar hi Dialog Popup (In-Sheet Dialog):**
+   - Google Sheets ke top menu bar me **`📸 Fit Photos`** menu automatically add ho jayega!
+   - Kisi bhi cell (BI-BM) ko select karein aur menu me click karein:
+     - **`📸 Fit Photos` > `🔍 Zoom Selected Photo (In-Sheet Dialog)`**
+   - Spreadsheet ke andar hi bina koi naya tab khole zoom modal open ho jayega!
 
 ---
 
@@ -47,9 +70,10 @@ If **both** `Code.gs` and `Snapped.gs` have `function doPost(e)`, Google Apps Sc
  * 1. Handles 1 to 10 photos per round.
  * 2. Uploads all individual photos + composite grid thumbnail to Google Drive.
  * 3. Uses official Google CDN URL (https://lh3.googleusercontent.com/d/FILE_ID) for =IMAGE() so photos ALWAYS display inside Google Sheets cells.
- * 4. Wraps image in =HYPERLINK() so clicking the thumbnail in Google Sheets opens full-resolution zoom in Google Drive!
- * 5. Adds Cell Notes with direct links to all individual photos (Photo 1 to 10).
- * 6. Target Columns:
+ * 4. Wraps image in =HYPERLINK() pointing to Instant Photo Zoom Lightbox (NO Google Drive folders!).
+ * 5. Adds In-Sheet Zoom Dialog menu: "📸 Fit Photos > 🔍 Zoom Selected Photo (In-Sheet Dialog)".
+ * 6. Adds Cell Notes with direct high-resolution zoom links to all individual photos (Photo 1 to 10).
+ * 7. Target Columns:
  *    - Round 1: Column BI (61)
  *    - Round 2: Column BJ (62)
  *    - Round 3: Column BK (63)
@@ -58,8 +82,12 @@ If **both** `Code.gs` and `Snapped.gs` have `function doPost(e)`, Google Apps Sc
  *    - Assignment ID: Column AX (50)
  */
 
-// Web app health check
+// Web app health check & Interactive Photo Zoom Lightbox
 function doGet(e) {
+  if (e && e.parameter && (e.parameter.zoom || e.parameter.folder)) {
+    return renderPhotoZoomViewer(e.parameter);
+  }
+
   return ContentService.createTextOutput(JSON.stringify({
     status: "ok",
     file: "Snapped.gs",
@@ -102,163 +130,129 @@ function doPost(e) {
     var sheetName = data.tabName || "General";
     var sheet = getSheetWithHeaders(ss, sheetName);
     
-    // Ensure sheet has at least 70 columns for all rounds + attachments (BI to BM)
-    if (sheet.getMaxColumns() < 70) {
-      sheet.insertColumnsAfter(sheet.getMaxColumns(), 70 - sheet.getMaxColumns());
-    }
-
     // 5. Find or create the row
-    var assignmentId = data.assignmentId || data.id || data.AX;
+    var assignmentId = data.assignmentId || data.id;
     var row = -1;
     
-    // Search for existing record if assignmentId is present (Column AX = 50)
+    // ALWAYS search for existing record if assignmentId is present (crucial for updating multi-round evaluations)
     if (assignmentId) {
-       row = findRow(sheet, assignmentId);
+      row = findRowByAssignmentId(sheet, assignmentId);
     }
     
-    // Fallback: search by Style No (Col D) and Model Name (Col B)
-    if (row === -1 && (data.styleNo || data.D)) {
-       row = findRowByStyle(sheet, data.styleNo || data.D, data.modelName || data.B);
+    // Fallback: search by Style Number and Model Name if not matched by ID
+    if (row === -1 && data.styleNo) {
+      row = findRowByStyleAndModel(sheet, data.styleNo, data.modelName);
     }
     
+    // If still not found, create a new row
     if (row === -1) {
-      // NEW SUBMISSION: Append a new row at the bottom
       row = sheet.getLastRow() + 1;
-      
-      // Initialize basic identifying markers
-      updateCell(sheet, row, "AX", assignmentId); // ID in column AX (50)
-      updateCell(sheet, row, "A", data.timestamp || new Date());
-    } else {
-      if (assignmentId) {
-        updateCell(sheet, row, "AX", assignmentId);
-      }
+      if (row <= 1) row = 2; // ensure we do not overwrite headers
     }
     
-    // 6. UPDATE GENERAL FIELDS (B-F)
-    updateCell(sheet, row, "B", data.modelName || data.model_name || data.B);
-    updateCell(sheet, row, "C", data.sampleType || data.typeOfSample || data.type_of_sample || data.C);
-    updateCell(sheet, row, "D", data.styleNo || data.style_number || data.D);
-    updateCell(sheet, row, "E", data.description || data.Instructions || data.E);
-    updateCell(sheet, row, "F", data.size || data.F);
-    
-    // 7. Update round-specific data (Rounds 1 to 5)
+    // 6. Map and write standard columns
     var round = String(data.round || "1");
     
-    if (round === "1") {
-      updateCell(sheet, row, "G", data.color || data.G);
-      updateCell(sheet, row, "H", data.givenForFitDate || data.H);
-      updateCell(sheet, row, "I", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.I);
-      updateCell(sheet, row, "J", data.receivedDate || data.received_date || data.J);
-      updateCell(sheet, row, "K", data.beforeWash || data.before_wash || data.K);
-      updateCell(sheet, row, "L", data.afterWash || data.after_wash || data.L);
-      updateCell(sheet, row, "M", data.fabricComments || data.fabricTrims || data.fabric_trims || data.M);
-    } 
-    else if (round === "2") {
-      updateCell(sheet, row, "O", data.color || data.O);
-      updateCell(sheet, row, "P", data.givenForFitDate || data.P); 
-      updateCell(sheet, row, "Q", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.Q); 
-      updateCell(sheet, row, "R", data.receivedDate || data.received_date || data.R);
-      updateCell(sheet, row, "S", data.beforeWash || data.before_wash || data.S);
-      updateCell(sheet, row, "T", data.afterWash || data.after_wash || data.T);
-      updateCell(sheet, row, "U", data.fabricComments || data.fabricTrims || data.fabric_trims || data.U);
-    } 
-    else if (round === "3") {
-      updateCell(sheet, row, "W", data.color || data.W); 
-      updateCell(sheet, row, "X", data.givenForFitDate || data.X); 
-      updateCell(sheet, row, "Y", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.Y); 
-      updateCell(sheet, row, "Z", data.receivedDate || data.received_date || data.Z);
-      updateCell(sheet, row, "AA", data.beforeWash || data.before_wash || data.AA);
-      updateCell(sheet, row, "AB", data.afterWash || data.after_wash || data.AB);
-      updateCell(sheet, row, "AC", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AC);
-    }
-    else if (round === "4") {
-      updateCell(sheet, row, "AE", data.color || data.AE); 
-      updateCell(sheet, row, "AF", data.givenForFitDate || data.AF); 
-      updateCell(sheet, row, "AG", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.AG); 
-      updateCell(sheet, row, "AH", data.receivedDate || data.received_date || data.AH);
-      updateCell(sheet, row, "AI", data.beforeWash || data.before_wash || data.AI);
-      updateCell(sheet, row, "AJ", data.afterWash || data.after_wash || data.AJ);
-      updateCell(sheet, row, "AK", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AK);
-    }
-    else if (round === "5") {
-      updateCell(sheet, row, "AM", data.color || data.AM); 
-      updateCell(sheet, row, "AN", data.givenForFitDate || data.AN); 
-      updateCell(sheet, row, "AO", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.AO); 
-      updateCell(sheet, row, "AP", data.receivedDate || data.received_date || data.AP);
-      updateCell(sheet, row, "AQ", data.beforeWash || data.before_wash || data.AQ);
-      updateCell(sheet, row, "AR", data.afterWash || data.after_wash || data.AR);
-      updateCell(sheet, row, "AS", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AS);
+    // Base Assignment Metadata (Cols A to F)
+    updateCell(sheet, row, "A", data.timestamp || new Date());
+    updateCell(sheet, row, "B", data.modelName);
+    updateCell(sheet, row, "C", data.sampleType || (round + (round === '1' ? 'st' : round === '2' ? 'nd' : round === '3' ? 'rd' : 'th') + " Fit Sample"));
+    updateCell(sheet, row, "D", data.styleNo);
+    updateCell(sheet, row, "E", data.description);
+    updateCell(sheet, row, "F", data.size);
+    
+    // Assignment ID in Column AX (Column 50)
+    if (assignmentId) {
+      updateCell(sheet, row, "AX", assignmentId);
     }
     
-    // 8. Handle Fit Photos & Cell Snapshot (Columns BI to BM)
-    if (data.attachments || data.collageAttachment || data.allImages || data.images) {
-      try {
-        handleAttachments(data, sheet, row);
-      } catch (photoErr) {
-        Logger.log("Non-blocking photo error: " + photoErr.message);
-      }
-    }
-
-    // 9. Handle automatic email notification
-    if (data.triggerEmail) {
-      sendMail(data);
+    // Dynamic Round Evaluation Columns
+    var roundColMap = {
+      "1": { color: "G", given: "H", commDate: "I", recvDate: "J", beforeWash: "K", afterWash: "L", fabric: "M" },
+      "2": { color: "O", given: "P", commDate: "Q", recvDate: "R", beforeWash: "S", afterWash: "T", fabric: "U" },
+      "3": { color: "W", given: "X", commDate: "Y", recvDate: "Z", beforeWash: "AA", afterWash: "AB", fabric: "AC" },
+      "4": { color: "AE", given: "AF", commDate: "AG", recvDate: "AH", beforeWash: "AI", afterWash: "AJ", fabric: "AK" },
+      "5": { color: "AM", given: "AN", commDate: "AO", recvDate: "AP", beforeWash: "AQ", afterWash: "AR", fabric: "AS" }
+    };
+    
+    var cols = roundColMap[round];
+    if (cols) {
+      if (data.color) updateCell(sheet, row, cols.color, data.color);
+      if (data.givenDate) updateCell(sheet, row, cols.given, data.givenDate);
+      if (data.commentsDate) updateCell(sheet, row, cols.commDate, data.commentsDate);
+      if (data.receivedDate) updateCell(sheet, row, cols.recvDate, data.receivedDate);
+      if (data.beforeWashRating || data.beforeWash) updateCell(sheet, row, cols.beforeWash, data.beforeWashRating || data.beforeWash);
+      if (data.afterWashRating || data.afterWash) updateCell(sheet, row, cols.afterWash, data.afterWashRating || data.afterWash);
+      if (data.fabricTrims) updateCell(sheet, row, cols.fabric, data.fabricTrims);
     }
     
-    return ContentService.createTextOutput("Success").setMimeType(ContentService.MimeType.TEXT);
+    // 7. Multi-Photo Snapshots Upload & Direct-Zoom =IMAGE() Embed (Columns BI to BM)
+    handleAttachments(data, sheet, row, round);
     
-  } catch (err) {
-    Logger.log("doPost Error: " + err.message);
-    return ContentService.createTextOutput("Error: " + err.message).setMimeType(ContentService.MimeType.TEXT);
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      row: row,
+      message: "Row " + row + " updated successfully with Fit Comment & Photo Snapshots!"
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log("doPost Error: " + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
   }
 }
 
-// Uploads photos to Google Drive and embeds snapshot directly into the cell
-function handleAttachments(data, sheet, rowIndex) {
-  if (!data || !sheet || !rowIndex) return;
+/**
+ * Uploads all attached photos (1 to 10 photos) to Google Drive
+ * and embeds a click-to-zoom formula directly into columns BI to BM.
+ */
+function handleAttachments(data, sheet, rowIndex, round) {
+  var photoColMap = {
+    "1": "BI", // Col 61
+    "2": "BJ", // Col 62
+    "3": "BK", // Col 63
+    "4": "BL", // Col 64
+    "5": "BM"  // Col 65
+  };
 
-  var round = String(data.round || "1");
-  var colMap = { "1": "BI", "2": "BJ", "3": "BK", "4": "BL", "5": "BM" };
-  var targetCol = data.attachmentColumn || colMap[round] || "BI";
-  var colIdx = colNameToIndex(targetCol);
-  if (colIdx <= 0) return;
+  var colLetter = photoColMap[round];
+  if (!colLetter) return;
+  var colIdx = colNameToIndex(colLetter);
 
-  if (sheet.getMaxColumns() < colIdx) {
-    sheet.insertColumnsAfter(sheet.getMaxColumns(), colIdx - sheet.getMaxColumns());
+  var hasAttachments = (data.collageAttachment && data.collageAttachment.data) ||
+                       (data.allImages && data.allImages.length > 0) ||
+                       (data.attachments && data.attachments.length > 0) ||
+                       (data.images && data.images.length > 0);
+
+  if (!hasAttachments) return;
+
+  // 1. Get or create parent folder
+  var parentFolder = getOrCreatePhotoFolder(data.driveFolderId);
+  var cleanStyle = (data.styleNo || "UnknownStyle").replace(/[^a-zA-Z0-9_-]/g, "_");
+  var folderName = cleanStyle + "_R" + round + "_FitPhotos";
+  
+  // 2. Create subfolder for this style and round
+  var targetFolder = null;
+  var existingFolders = parentFolder.getFoldersByName(folderName);
+  if (existingFolders.hasNext()) {
+    targetFolder = existingFolders.next();
+  } else {
+    targetFolder = parentFolder.createFolder(folderName);
   }
-
-  // 1. Get or create root Drive Folder
-  var folder = getOrCreatePhotoFolder(data.folderId);
-  if (!folder) {
-    folder = DriveApp.getRootFolder();
-  }
-
-  var cleanStyle = String(data.styleNo || data.D || "Sample").replace(/[^a-zA-Z0-9_-]/g, "_");
-  var cleanModel = String(data.modelName || data.B || "Model").replace(/[^a-zA-Z0-9_-]/g, "_");
-  var subFolderName = cleanStyle + "_R" + round + "_" + cleanModel;
-  var targetFolder = folder;
-
-  // 2. Create subfolder for this Style + Round
   try {
-    var subIter = folder.getFoldersByName(subFolderName);
-    if (subIter.hasNext()) {
-      targetFolder = subIter.next();
-    } else {
-      targetFolder = folder.createFolder(subFolderName);
-      try {
-        targetFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      } catch (e) {}
-    }
-  } catch (errSub) {
-    targetFolder = folder;
-  }
+    targetFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (e) {}
 
   var imageToEmbedUrl = null;
   var primaryViewUrl = null;
+  var cFileId = null;
   var photoViewLinks = [];
 
-  // 3. Upload Collage / Grid Snapshot if present (Contains all 1-10 photos in a clean thumbnail grid!)
+  // 3. Upload Composite Grid Thumbnail (if provided)
   if (data.collageAttachment && data.collageAttachment.data) {
     try {
       var cData = data.collageAttachment.data;
@@ -271,10 +265,10 @@ function handleAttachments(data, sheet, rowIndex) {
         cFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
       } catch (e) {}
       
-      var cFileId = cFile.getId();
+      cFileId = cFile.getId();
       // CRITICAL: Google Sheets =IMAGE() MUST use https://lh3.googleusercontent.com/d/FILE_ID
       imageToEmbedUrl = "https://lh3.googleusercontent.com/d/" + cFileId;
-      primaryViewUrl = "https://drive.google.com/file/d/" + cFileId + "/view?usp=sharing";
+      primaryViewUrl = "https://lh3.googleusercontent.com/d/" + cFileId + "=s0";
     } catch (cErr) {
       Logger.log("Collage creation error: " + cErr.message);
     }
@@ -285,6 +279,8 @@ function handleAttachments(data, sheet, rowIndex) {
   if (data.allImages && data.allImages.length > 0) list = data.allImages;
   else if (data.attachments && data.attachments.length > 0) list = data.attachments;
   else if (data.images && data.images.length > 0) list = data.images;
+
+  var photoFileIds = [];
 
   for (var i = 0; i < list.length; i++) {
     try {
@@ -305,40 +301,54 @@ function handleAttachments(data, sheet, rowIndex) {
       } catch (e) {}
 
       var fileId = file.getId();
+      photoFileIds.push(fileId);
       var directUrl = "https://lh3.googleusercontent.com/d/" + fileId;
-      var viewLink = "https://drive.google.com/file/d/" + fileId + "/view?usp=sharing";
-      photoViewLinks.push(viewLink);
+      var directZoomLink = "https://lh3.googleusercontent.com/d/" + fileId + "=s0";
+      photoViewLinks.push({ id: fileId, zoomUrl: directZoomLink, name: fName });
 
       if (!imageToEmbedUrl) {
         imageToEmbedUrl = directUrl;
-        primaryViewUrl = viewLink;
+        primaryViewUrl = directZoomLink;
       }
     } catch (attErr) {
       Logger.log("File " + i + " upload error: " + attErr.message);
     }
   }
 
-  // 5. Embed Image Formula in the Target Cell with Direct Click to Zoom
+  // 5. Embed Image Formula in Target Cell with Direct Click to Zoom (NO Google Drive Folder!)
   var cell = sheet.getRange(rowIndex, colIdx);
   if (imageToEmbedUrl) {
     try {
-      var destinationUrl = targetFolder.getUrl() || primaryViewUrl;
-      // Formula: =HYPERLINK("drive_link", IMAGE("lh3_link", 1))
-      cell.setFormula('=HYPERLINK("' + destinationUrl + '", IMAGE("' + imageToEmbedUrl + '", 1))');
+      var scriptUrl = "";
+      try {
+        scriptUrl = ScriptApp.getService().getUrl();
+      } catch (e) {}
+
+      var primaryId = cFileId || (photoFileIds.length > 0 ? photoFileIds[0] : "");
+      var directCdnZoomUrl = "https://lh3.googleusercontent.com/d/" + primaryId + "=s0";
+      
+      // If Web App is published, open interactive Zoom Lightbox with 1-10 photos gallery
+      // Otherwise fallback to direct high-res CDN zoom with native browser magnifier
+      var zoomDestinationUrl = (scriptUrl && scriptUrl.indexOf("http") === 0)
+        ? (scriptUrl + "?zoom=" + primaryId + "&folder=" + targetFolder.getId() + "&style=" + encodeURIComponent(cleanStyle) + "&round=" + round)
+        : directCdnZoomUrl;
+
+      // Formula: =HYPERLINK("zoom_url", IMAGE("lh3_link", 1))
+      cell.setFormula('=HYPERLINK("' + zoomDestinationUrl + '", IMAGE("' + imageToEmbedUrl + '", 1))');
       
       // Formatting for clean visibility
       sheet.setRowHeight(rowIndex, 85);
       sheet.setColumnWidth(colIdx, 115);
       cell.setHorizontalAlignment("center").setVerticalAlignment("middle");
 
-      // Cell Note with direct links to every single photo
+      // Cell Note with direct links to every single photo in full HD zoom
       var totalPhotos = photoViewLinks.length || (data.attachmentsCount || 1);
       var note = "📸 Fit Photos (" + totalPhotos + " Photos Attached):\n";
-      note += "👉 Click cell to open & zoom full HD in Google Drive\n\n";
+      note += "👉 CLICK CELL TO ZOOM PHOTO DIRECTLY!\n\n";
       for (var k = 0; k < photoViewLinks.length; k++) {
-        note += "• Photo " + (k + 1) + ": " + photoViewLinks[k] + "\n";
+        note += "• Photo " + (k + 1) + " (Zoom): " + photoViewLinks[k].zoomUrl + "\n";
       }
-      note += "\n📁 All Photos Folder: " + targetFolder.getUrl();
+      note += "\n• Interactive Gallery: " + zoomDestinationUrl;
       cell.setNote(note);
 
     } catch (imgErr) {
@@ -373,14 +383,15 @@ function getOrCreatePhotoFolder(folderId) {
   try {
     var folders = DriveApp.getFoldersByName("SOIE_Fit_Attachments");
     if (folders.hasNext()) {
-      var existing = folders.next();
-      try { existing.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
-      return existing;
+      return folders.next();
     }
     var created = DriveApp.createFolder("SOIE_Fit_Attachments");
-    try { created.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    try {
+      created.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (e) {}
     return created;
   } catch (err) {
+    Logger.log("Folder creation error: " + err.message);
     return DriveApp.getRootFolder();
   }
 }
@@ -389,64 +400,88 @@ function getSheetWithHeaders(ss, sheetName) {
   var sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
     sheet = ss.insertSheet(sheetName);
+  }
+  
+  if (sheet.getLastRow() === 0) {
     var headers = [
-      "Timestamp", "Model Name", "Type of sample", "Style no", "Description", "Size", 
-      "R1 Color", "R1 Fit Date", "R1 Comments Date", "R1 Received", "R1 Before Wash", "R1 After Wash", "R1 Fabric/Trims", "R1 Feedback",
-      "R2 Color", "R2 Fit Date", "R2 Comments Date", "R2 Received", "R2 Before Wash", "R2 After Wash", "R2 Fabric/Trims", "R2 Feedback",
-      "R3 Color", "R3 Fit Date", "R3 Comments Date", "R3 Received", "R3 Before Wash", "R3 After Wash", "R3 Fabric/Trims", "R3 Feedback",
-      "R4 Color", "R4 Fit Date", "R4 Comments Date", "R4 Received", "R4 Before Wash", "R4 After Wash", "R4 Fabric/Trims", "R4 Feedback",
-      "R5 Color", "R5 Fit Date", "R5 Comments Date", "R5 Received", "R5 Before Wash", "R5 After Wash", "R5 Fabric/Trims", "R5 Feedback"
+      "Timestamp", "Model Name", "Type of Sample", "Style No", "Description", "Size",
+      "R1 Color", "R1 Given Date", "R1 Comments Date", "R1 Recv Date", "R1 Before Wash", "R1 After Wash", "R1 Fabric/Trims",
+      "R1 Status",
+      "R2 Color", "R2 Given Date", "R2 Comments Date", "R2 Recv Date", "R2 Before Wash", "R2 After Wash", "R2 Fabric/Trims",
+      "R2 Status",
+      "R3 Color", "R3 Given Date", "R3 Comments Date", "R3 Recv Date", "R3 Before Wash", "R3 After Wash", "R3 Fabric/Trims",
+      "R3 Status",
+      "R4 Color", "R4 Given Date", "R4 Comments Date", "R4 Recv Date", "R4 Before Wash", "R4 After Wash", "R4 Fabric/Trims",
+      "R4 Status",
+      "R5 Color", "R5 Given Date", "R5 Comments Date", "R5 Recv Date", "R5 Before Wash", "R5 After Wash", "R5 Fabric/Trims"
     ];
     sheet.appendRow(headers);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#f3f4f6");
     sheet.setFrozenRows(1);
-    sheet.getRange(1, 1, 1, headers.length).setBackground("#f3f4f6").setFontWeight("bold");
+  }
+  
+  // Ensure Column AX header exists for ID tracking
+  var axIndex = colNameToIndex("AX");
+  if (sheet.getMaxColumns() < axIndex) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), axIndex - sheet.getMaxColumns());
+  }
+  var axCell = sheet.getRange(1, axIndex);
+  if (!axCell.getValue()) {
+    axCell.setValue("Assignment ID").setFontWeight("bold").setBackground("#e0e7ff");
   }
 
-  // Ensure headers for photo columns BI to BM exist
-  try {
-    if (sheet.getMaxColumns() < 70) {
-      sheet.insertColumnsAfter(sheet.getMaxColumns(), 70 - sheet.getMaxColumns());
+  // Ensure Columns BI to BM headers exist for Photo Snapshots
+  var bmIndex = colNameToIndex("BM");
+  if (sheet.getMaxColumns() < bmIndex) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), bmIndex - sheet.getMaxColumns());
+  }
+
+  var photoHeaders = [
+    { col: "BI", title: "R1 Photos" },
+    { col: "BJ", title: "R2 Photos" },
+    { col: "BK", title: "R3 Photos" },
+    { col: "BL", title: "R4 Photos" },
+    { col: "BM", title: "R5 Photos" }
+  ];
+
+  photoHeaders.forEach(function(h) {
+    var cIdx = colNameToIndex(h.col);
+    var cell = sheet.getRange(1, cIdx);
+    if (!cell.getValue()) {
+      cell.setValue(h.title).setFontWeight("bold").setBackground("#dcfce7");
     }
-    var photoHeaders = {
-      "BI": "R1 Fit Photos",
-      "BJ": "R2 Fit Photos",
-      "BK": "R3 Fit Photos",
-      "BL": "R4 Fit Photos",
-      "BM": "R5 Fit Photos"
-    };
-    for (var colKey in photoHeaders) {
-      var cIdx = colNameToIndex(colKey);
-      var currentVal = sheet.getRange(1, cIdx).getValue();
-      if (!currentVal) {
-        sheet.getRange(1, cIdx).setValue(photoHeaders[colKey]).setBackground("#e0e7ff").setFontWeight("bold");
-      }
-    }
-  } catch (e) {}
+  });
 
   return sheet;
 }
 
-function findRow(sheet, assignmentId) {
-  if (!assignmentId) return -1;
+function findRowByAssignmentId(sheet, targetId) {
+  if (!targetId) return -1;
+  var cleanTarget = String(targetId).trim().toLowerCase();
+  var axIndex = colNameToIndex("AX");
+  
+  if (sheet.getMaxColumns() < axIndex) return -1;
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return -1;
   
-  var ids = sheet.getRange(1, 50, lastRow, 1).getValues();
-  var targetId = String(assignmentId).trim().toLowerCase();
-  
-  for (var i = 1; i < ids.length; i++) {
-    var sheetId = String(ids[i][0]).trim().toLowerCase();
-    if (sheetId === targetId) return i + 1;
+  var ids = sheet.getRange(2, axIndex, lastRow - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]).trim().toLowerCase() === cleanTarget) {
+      return i + 2;
+    }
   }
   return -1;
 }
 
-function findRowByStyle(sheet, styleNo, modelName) {
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return -1;
+function findRowByStyleAndModel(sheet, styleNo, modelName) {
+  if (!styleNo) return -1;
   var targetStyle = String(styleNo).trim().toLowerCase();
   var targetModel = modelName ? String(modelName).trim().toLowerCase() : "";
-  var data = sheet.getRange(2, 2, lastRow - 1, 3).getValues(); // Cols B (2), C (3), D (4)
+  
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+  
+  var data = sheet.getRange(2, 2, lastRow - 1, 3).getValues();
   for (var i = 0; i < data.length; i++) {
     var mName = String(data[i][0]).trim().toLowerCase();
     var sNo = String(data[i][2]).trim().toLowerCase();
@@ -518,6 +553,342 @@ function testRun() {
 
   Logger.log("=== SUCCESS: Permissions authorized successfully! ===");
 }
+
+// Automatically adds menu in Google Sheets for instant in-sheet photo zoom
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu("📸 Fit Photos")
+      .addItem("🔍 Zoom Selected Photo (In-Sheet Dialog)", "showPhotoZoomDialog")
+      .addItem("🌐 Open Photo Zoom Viewer", "openPhotoZoomInNewTab")
+      .addToUi();
+  } catch (e) {}
+}
+
+// 1. Opens an interactive full-screen popup dialog right inside Google Sheets (No new tab!)
+function showPhotoZoomDialog() {
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var cell = sheet.getActiveCell();
+  var formula = cell.getFormula() || "";
+  var note = cell.getNote() || "";
+  
+  var fileId = "";
+  var match = formula.match(/lh3\.googleusercontent\.com\/d\/([a-zA-Z0-9_-]+)/) ||
+              formula.match(/[?&]zoom=([a-zA-Z0-9_-]+)/) ||
+              note.match(/lh3\.googleusercontent\.com\/d\/([a-zA-Z0-9_-]+)/);
+              
+  if (match && match[1]) {
+    fileId = match[1];
+  }
+  
+  var folderId = "";
+  var folderMatch = formula.match(/[?&]folder=([a-zA-Z0-9_-]+)/) ||
+                    note.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (folderMatch && folderMatch[1]) {
+    folderId = folderMatch[1];
+  }
+  
+  if (!fileId && !folderId) {
+    SpreadsheetApp.getUi().alert("No fit photo found in this cell.\n\nPlease select a cell in Columns BI, BJ, BK, BL, or BM that contains a photo thumbnail.");
+    return;
+  }
+  
+  var photos = [];
+  if (folderId) {
+    try {
+      var folder = DriveApp.getFolderById(folderId);
+      var files = folder.getFiles();
+      while (files.hasNext()) {
+        var f = files.next();
+        var fId = f.getId();
+        var fName = f.getName();
+        if (f.getMimeType().indexOf("image") > -1) {
+          photos.push({
+            id: fId,
+            name: fName,
+            url: "https://lh3.googleusercontent.com/d/" + fId + "=s0",
+            thumb: "https://lh3.googleusercontent.com/d/" + fId + "=s200",
+            isGrid: fName.indexOf("Grid") > -1
+          });
+        }
+      }
+    } catch (e) {}
+  }
+  
+  if (photos.length === 0 && fileId) {
+    photos.push({
+      id: fileId,
+      name: "Fit Photo",
+      url: "https://lh3.googleusercontent.com/d/" + fileId + "=s0",
+      thumb: "https://lh3.googleusercontent.com/d/" + fileId + "=s200",
+      isGrid: false
+    });
+  }
+  
+  var html = buildZoomViewerHtml(photos, "Fit Photo Zoom", "", fileId);
+  var htmlOutput = HtmlService.createHtmlOutput(html)
+    .setWidth(950)
+    .setHeight(680);
+  SpreadsheetApp.getUi().showModalDialog(htmlOutput, "📸 Fit Photo Zoom Viewer");
+}
+
+function openPhotoZoomInNewTab() {
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var cell = sheet.getActiveCell();
+  var formula = cell.getFormula() || "";
+  var note = cell.getNote() || "";
+  
+  var match = formula.match(/=HYPERLINK\("([^"]+)"/) ||
+              formula.match(/(https:\/\/[^",\s\)]+)/) ||
+              note.match(/(https:\/\/[^\s\)]+)/);
+              
+  if (match && match[1]) {
+    var url = match[1];
+    var html = "<script>window.open('" + url + "', '_blank'); google.script.host.close();</script>" +
+               "<div style='font-family:sans-serif;padding:20px;text-align:center;'>Opening Photo Zoom Viewer...</div>";
+    var htmlOutput = HtmlService.createHtmlOutput(html).setWidth(300).setHeight(100);
+    SpreadsheetApp.getUi().showModalDialog(htmlOutput, "Opening Zoom...");
+  } else {
+    SpreadsheetApp.getUi().alert("Please select a photo cell in Columns BI-BM.");
+  }
+}
+
+// 2. Web App Interactive Photo Zoom Lightbox Viewer
+function renderPhotoZoomViewer(params) {
+  var fileId = params.zoom || "";
+  var folderId = params.folder || "";
+  var style = params.style || "Fit Sample";
+  var round = params.round || "1";
+  
+  var photos = [];
+  
+  if (folderId) {
+    try {
+      var folder = DriveApp.getFolderById(folderId);
+      var files = folder.getFiles();
+      while (files.hasNext()) {
+        var f = files.next();
+        var fId = f.getId();
+        var fName = f.getName();
+        if (f.getMimeType().indexOf("image") > -1) {
+          photos.push({
+            id: fId,
+            name: fName,
+            url: "https://lh3.googleusercontent.com/d/" + fId + "=s0",
+            thumb: "https://lh3.googleusercontent.com/d/" + fId + "=s200",
+            isGrid: fName.indexOf("Grid") > -1
+          });
+        }
+      }
+    } catch (e) {
+      Logger.log("Folder read error: " + e.message);
+    }
+  }
+  
+  if (photos.length === 0 && fileId) {
+    photos.push({
+      id: fileId,
+      name: "Fit Photo",
+      url: "https://lh3.googleusercontent.com/d/" + fileId + "=s0",
+      thumb: "https://lh3.googleusercontent.com/d/" + fileId + "=s200",
+      isGrid: false
+    });
+  }
+  
+  var html = buildZoomViewerHtml(photos, style, round, fileId);
+  return HtmlService.createHtmlOutput(html)
+    .setTitle("Fit Photo Zoom - " + style + " (R" + round + ")")
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag("viewport", "width=device-width, initial-scale=1.0, maximum-scale=5.0");
+}
+
+function buildZoomViewerHtml(photos, style, round, initialFileId) {
+  var photosJson = JSON.stringify(photos);
+  var html = '<!DOCTYPE html>' +
+    '<html><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">' +
+    '<title>' + escapeHtml(style) + ' Photo Zoom</title>' +
+    '<style>' +
+    '* { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }' +
+    'body { background: #090d16; color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }' +
+    'header { background: rgba(15, 23, 42, 0.95); border-bottom: 1px solid #1e293b; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; z-index: 10; }' +
+    '.title-group { display: flex; align-items: center; gap: 10px; }' +
+    '.badge { background: #4f46e5; color: #fff; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; }' +
+    '.title { font-size: 14px; font-weight: 600; color: #f8fafc; }' +
+    '.subtitle { font-size: 11px; color: #94a3b8; }' +
+    '.controls { display: flex; align-items: center; gap: 6px; }' +
+    '.btn { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 6px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; transition: all 0.15s; }' +
+    '.btn:hover { background: #334155; color: #fff; border-color: #475569; }' +
+    '.btn:active { transform: scale(0.96); }' +
+    '.btn-primary { background: #4338ca; border-color: #4f46e5; color: #fff; }' +
+    '.btn-primary:hover { background: #4f46e5; }' +
+    '.zoom-pct { font-size: 12px; font-variant-numeric: tabular-nums; color: #94a3b8; min-width: 44px; text-align: center; }' +
+    '.stage-container { flex: 1; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #070a11; cursor: grab; }' +
+    '.stage-container:active { cursor: grabbing; }' +
+    '#viewer-img { max-width: 100%; max-height: 100%; transform-origin: center center; transition: transform 0.05s ease-out; box-shadow: 0 20px 50px rgba(0,0,0,0.8); pointer-events: none; border-radius: 4px; }' +
+    '.hint-bar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); padding: 4px 14px; border-radius: 20px; font-size: 11px; color: #94a3b8; pointer-events: none; z-index: 5; white-space: nowrap; }' +
+    'footer { background: rgba(15, 23, 42, 0.95); border-top: 1px solid #1e293b; padding: 8px 16px; display: flex; align-items: center; gap: 10px; overflow-x: auto; z-index: 10; }' +
+    '.thumb { width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 2px solid transparent; cursor: pointer; flex-shrink: 0; opacity: 0.65; transition: all 0.15s; background: #1e293b; }' +
+    '.thumb:hover { opacity: 0.9; border-color: #64748b; }' +
+    '.thumb.active { opacity: 1; border-color: #6366f1; box-shadow: 0 0 10px rgba(99, 102, 241, 0.5); }' +
+    '.thumb img { width: 100%; height: 100%; object-fit: cover; }' +
+    '</style></head>' +
+    '<body>' +
+    '<header>' +
+    '  <div class="title-group">' +
+    '    <span class="badge">' + (round ? 'Round ' + escapeHtml(round) : 'Fit Photos') + '</span>' +
+    '    <div>' +
+    '      <div class="title">' + escapeHtml(style) + '</div>' +
+    '      <div class="subtitle" id="photo-counter">Loading photo...</div>' +
+    '    </div>' +
+    '  </div>' +
+    '  <div class="controls">' +
+    '    <button class="btn" onclick="zoomDelta(-0.25)" title="Zoom Out">🔍 -</button>' +
+    '    <span class="zoom-pct" id="zoom-level">100%</span>' +
+    '    <button class="btn" onclick="zoomDelta(0.25)" title="Zoom In">🔍 +</button>' +
+    '    <button class="btn" onclick="resetZoom()" title="Fit to Screen">⤢ Fit</button>' +
+    '    <button class="btn" onclick="setActualSize()" title="100% Actual Resolution">1:1 HD</button>' +
+    '    <button class="btn" onclick="rotateImage()" title="Rotate 90°">⟳ Rotate</button>' +
+    '    <button class="btn btn-primary" onclick="openOriginal()" title="Open Original Image">↗ Full Res</button>' +
+    '  </div>' +
+    '</header>' +
+    '<div class="stage-container" id="stage">' +
+    '  <div class="hint-bar">💡 Scroll to Zoom • Drag to Pan • Double-Click to Zoom In/Out</div>' +
+    '  <img id="viewer-img" src="" alt="Fit Photo">' +
+    '</div>' +
+    '<footer id="thumbs-bar"></footer>' +
+    '<script>' +
+    'var photos = ' + photosJson + ';' +
+    'var currentIndex = 0;' +
+    'var scale = 1;' +
+    'var posX = 0;' +
+    'var posY = 0;' +
+    'var rotation = 0;' +
+    'var isDragging = false;' +
+    'var startX = 0;' +
+    'var startY = 0;' +
+    'var stage = document.getElementById("stage");' +
+    'var img = document.getElementById("viewer-img");' +
+    'var zoomText = document.getElementById("zoom-level");' +
+    'var counter = document.getElementById("photo-counter");' +
+    'var thumbsBar = document.getElementById("thumbs-bar");' +
+    'function init() {' +
+    '  if (!photos || photos.length === 0) return;' +
+    '  for (var i = 0; i < photos.length; i++) {' +
+    '    if (photos[i].id === "' + initialFileId + '") { currentIndex = i; break; }' +
+    '  }' +
+    '  renderThumbs();' +
+    '  loadPhoto(currentIndex);' +
+    '  setupEvents();' +
+    '}' +
+    'function renderThumbs() {' +
+    '  thumbsBar.innerHTML = "";' +
+    '  photos.forEach(function(p, idx) {' +
+    '    var d = document.createElement("div");' +
+    '    d.className = "thumb" + (idx === currentIndex ? " active" : "");' +
+    '    d.title = p.isGrid ? "Composite Grid" : "Photo " + (idx + 1);' +
+    '    d.onclick = function() { loadPhoto(idx); };' +
+    '    var im = document.createElement("img");' +
+    '    im.src = p.thumb || p.url;' +
+    '    d.appendChild(im);' +
+    '    thumbsBar.appendChild(d);' +
+    '  });' +
+    '}' +
+    'function loadPhoto(idx) {' +
+    '  currentIndex = idx;' +
+    '  var p = photos[idx];' +
+    '  img.src = p.url;' +
+    '  resetZoom();' +
+    '  counter.textContent = (p.isGrid ? "Grid Overview" : "Photo " + (idx + 1) + " of " + photos.length) + " • " + (p.name || "");' +
+    '  var thumbs = document.querySelectorAll(".thumb");' +
+    '  thumbs.forEach(function(t, i) { t.className = "thumb" + (i === idx ? " active" : ""); });' +
+    '}' +
+    'function updateTransform() {' +
+    '  img.style.transform = "translate(" + posX + "px, " + posY + "px) scale(" + scale + ") rotate(" + rotation + "deg)";' +
+    '  zoomText.textContent = Math.round(scale * 100) + "%";' +
+    '}' +
+    'function zoomDelta(d) {' +
+    '  scale = Math.min(Math.max(scale + d, 0.2), 6);' +
+    '  updateTransform();' +
+    '}' +
+    'function resetZoom() {' +
+    '  scale = 1;' +
+    '  posX = 0;' +
+    '  posY = 0;' +
+    '  rotation = 0;' +
+    '  updateTransform();' +
+    '}' +
+    'function setActualSize() {' +
+    '  scale = (scale === 2) ? 1 : 2;' +
+    '  posX = 0;' +
+    '  posY = 0;' +
+    '  updateTransform();' +
+    '}' +
+    'function rotateImage() {' +
+    '  rotation = (rotation + 90) % 360;' +
+    '  updateTransform();' +
+    '}' +
+    'function openOriginal() {' +
+    '  if (photos[currentIndex]) window.open(photos[currentIndex].url, "_blank");' +
+    '}' +
+    'function setupEvents() {' +
+    '  stage.addEventListener("wheel", function(e) {' +
+    '    e.preventDefault();' +
+    '    var delta = e.deltaY < 0 ? 0.2 : -0.2;' +
+    '    zoomDelta(delta);' +
+    '  }, { passive: false });' +
+    '  stage.addEventListener("mousedown", function(e) {' +
+    '    if (e.button !== 0) return;' +
+    '    isDragging = true;' +
+    '    startX = e.clientX - posX;' +
+    '    startY = e.clientY - posY;' +
+    '  });' +
+    '  window.addEventListener("mousemove", function(e) {' +
+    '    if (!isDragging) return;' +
+    '    posX = e.clientX - startX;' +
+    '    posY = e.clientY - startY;' +
+    '    updateTransform();' +
+    '  });' +
+    '  window.addEventListener("mouseup", function() { isDragging = false; });' +
+    '  stage.addEventListener("dblclick", function(e) {' +
+    '    e.preventDefault();' +
+    '    if (scale > 1.2) resetZoom(); else { scale = 2.5; updateTransform(); }' +
+    '  });' +
+    '  var touchStartDist = 0;' +
+    '  var touchStartScale = 1;' +
+    '  stage.addEventListener("touchstart", function(e) {' +
+    '    if (e.touches.length === 1) {' +
+    '      isDragging = true;' +
+    '      startX = e.touches[0].clientX - posX;' +
+    '      startY = e.touches[0].clientY - posY;' +
+    '    } else if (e.touches.length === 2) {' +
+    '      isDragging = false;' +
+    '      touchStartDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);' +
+    '      touchStartScale = scale;' +
+    '    }' +
+    '  });' +
+    '  stage.addEventListener("touchmove", function(e) {' +
+    '    if (e.touches.length === 1 && isDragging) {' +
+    '      posX = e.touches[0].clientX - startX;' +
+    '      posY = e.touches[0].clientY - startY;' +
+    '      updateTransform();' +
+    '    } else if (e.touches.length === 2) {' +
+    '      var dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);' +
+    '      scale = Math.min(Math.max((dist / touchStartDist) * touchStartScale, 0.3), 5);' +
+    '      updateTransform();' +
+    '    }' +
+    '  });' +
+    '  stage.addEventListener("touchend", function() { isDragging = false; });' +
+    '}' +
+    'init();' +
+    '</script></body></html>';
+  return html;
+}
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
 ```
 
 ---
@@ -538,8 +909,8 @@ function testRun() {
 | **Col AE to AK**| 31–37 | **Round 4 Evaluation**: Color (AE), Given Date (AF), Comments Date (AG), Received Date (AH), Before Wash (AI), After Wash (AJ), Fabric/Trims (AK) |
 | **Col AM to AS**| 39–45 | **Round 5 Evaluation**: Color (AM), Given Date (AN), Comments Date (AO), Received Date (AP), Before Wash (AQ), After Wash (AR), Fabric/Trims (AS) |
 | **Col AX** | 50 | **Assignment ID**: Unique Supabase ID for persistent multi-round row matching |
-| **Col BI** | 61 | **R1 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to Drive |
-| **Col BJ** | 62 | **R2 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to Drive |
-| **Col BK** | 63 | **R3 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to Drive |
-| **Col BL** | 64 | **R4 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to Drive |
-| **Col BM** | 65 | **R5 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to Drive |
+| **Col BI** | 61 | **R1 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to **Instant Photo Zoom Lightbox** |
+| **Col BJ** | 62 | **R2 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to **Instant Photo Zoom Lightbox** |
+| **Col BK** | 63 | **R3 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to **Instant Photo Zoom Lightbox** |
+| **Col BL** | 64 | **R4 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to **Instant Photo Zoom Lightbox** |
+| **Col BM** | 65 | **R5 Photo Snapshot**: Embeds `=IMAGE(...)` photo thumbnail linked to **Instant Photo Zoom Lightbox** |

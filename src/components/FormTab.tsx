@@ -9,7 +9,7 @@ import { Label } from './ui/label';
 import { Plus, Trash2, Send, Loader2, Info, RefreshCw, User } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from './ui/badge';
-import { getSeriesFromStyleNumber } from '../lib/series-utils';
+import { getSeriesFromStyleNumber, getDeterministicId } from '../lib/series-utils';
 import { v4 as uuidv4 } from 'uuid';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
 import { db, auth, safeFirestoreWrite, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from '../lib/firebase';
@@ -59,33 +59,6 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   const [user, setUser] = useState<any>(null);
   const [deletedAssignmentIds, setDeletedAssignmentIds] = useState<string[]>([]);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
-
-  const getDeterministicId = (subId: string, email: string) => {
-    if (!subId || !email) return uuidv4();
-    
-    // Create a 32-char hex string from subId and email
-    const seed = `${subId}_${email.toLowerCase().trim()}`;
-    
-    // Simple deterministic hash function
-    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
-    for (let i = 0, ch; i < seed.length; i++) {
-        ch = seed.charCodeAt(i);
-        h1 = Math.imul(h1 ^ ch, 2654435761);
-        h2 = Math.imul(h2 ^ ch, 1597334677);
-    }
-    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-    
-    const hex1 = (h1 >>> 0).toString(16).padStart(8, '0');
-    const hex2 = (h2 >>> 0).toString(16).padStart(8, '0');
-    const hex3 = ((h1 ^ 0x6E616E6F) >>> 0).toString(16).padStart(8, '0');
-    const hex4 = ((h2 ^ 0x62756C6C) >>> 0).toString(16).padStart(8, '0');
-    
-    const fullHex = (hex1 + hex2 + hex3 + hex4).substring(0, 32);
-    
-    // Format as UUID: 8-4-4-4-12
-    return `${fullHex.slice(0, 8)}-${fullHex.slice(8, 12)}-${fullHex.slice(12, 16)}-${fullHex.slice(16, 20)}-${fullHex.slice(20, 32)}`;
-  };
 
   // Listen for Style No changes to auto-detect existing submissions
   useEffect(() => {
@@ -438,12 +411,13 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         // This forces merging in the database and Google Sheets
         const finalAId = getDeterministicId(submissionId!, a.modelEmail);
         const dateQuery = a.givenForFitDate?.trim() ? `&givenDate=${encodeURIComponent(a.givenForFitDate.trim())}` : '';
+        const metaQuery = `&styleNo=${encodeURIComponent(styleNo.trim())}&sampleType=${encodeURIComponent(typeOfSample)}&modelName=${encodeURIComponent(a.modelName)}&modelEmail=${encodeURIComponent(a.modelEmail)}&size=${encodeURIComponent(a.size || '')}&color=${encodeURIComponent(a.color || '')}`;
         
-        const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=1${dateQuery}`;
-        const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=2${dateQuery}`;
-        const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=3${dateQuery}`;
-        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=4${dateQuery}`;
-        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=5${dateQuery}`;
+        const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=1${dateQuery}${metaQuery}`;
+        const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=2${dateQuery}${metaQuery}`;
+        const r3Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=3${dateQuery}${metaQuery}`;
+        const r4Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=4${dateQuery}${metaQuery}`;
+        const r5Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=5${dateQuery}${metaQuery}`;
         return { ...a, id: finalAId, r1Link, r2Link, r3Link, r4Link, r5Link };
       });
 
@@ -558,6 +532,38 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           }, { merge: true });
         }
       });
+
+      // 2b-2. Local Storage Instant Cache (Enables 0ms opening for any feedback form)
+      try {
+        const cachedSubObj = {
+          id: submissionId,
+          style_number: styleNo.trim(),
+          styleNo: styleNo.trim(),
+          type_of_sample: typeOfSample,
+          sampleType: typeOfSample,
+          description: description,
+          series: series || 'General',
+          submitted_by: userEmail
+        };
+        localStorage.setItem(`fit_cache_sub_${submissionId}`, JSON.stringify(cachedSubObj));
+        localStorage.setItem(`fit_cache_ass_list_${submissionId}`, JSON.stringify(assignmentsWithLinks));
+        assignmentsWithLinks.forEach(a => {
+          localStorage.setItem(`fit_cache_ass_${a.id}`, JSON.stringify({
+            id: a.id,
+            submission_id: submissionId,
+            model_name: a.modelName,
+            model_email: a.modelEmail,
+            color: a.color,
+            size: a.size,
+            given_for_fit_date: a.givenForFitDate,
+            round1: a.round1Data,
+            round2: a.round2Data,
+            round3: a.round3Data,
+            round4: a.round4Data,
+            round5: a.round5Data
+          }));
+        });
+      } catch (e) {}
 
       // 2c. Handle Deletions (Supabase & Firestore)
       if (editMode && deletedAssignmentIds.length > 0) {

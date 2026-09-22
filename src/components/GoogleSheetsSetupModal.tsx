@@ -43,8 +43,12 @@ export const APPS_SCRIPT_CODE = `/**
  *    - Assignment ID: Column AX (50)
  */
 
-// Web app health check
+// Web app health check & Interactive Photo Zoom Lightbox
 function doGet(e) {
+  if (e && e.parameter && (e.parameter.zoom || e.parameter.folder)) {
+    return renderPhotoZoomViewer(e.parameter);
+  }
+
   return ContentService.createTextOutput(JSON.stringify({
     status: "ok",
     file: "Snapped.gs",
@@ -259,7 +263,7 @@ function handleAttachments(data, sheet, rowIndex) {
       var cFileId = cFile.getId();
       // CRITICAL: Google Sheets =IMAGE() MUST use https://lh3.googleusercontent.com/d/FILE_ID
       imageToEmbedUrl = "https://lh3.googleusercontent.com/d/" + cFileId;
-      primaryViewUrl = "https://drive.google.com/file/d/" + cFileId + "/view?usp=sharing";
+      primaryViewUrl = "https://lh3.googleusercontent.com/d/" + cFileId + "=s0";
     } catch (cErr) {
       Logger.log("Collage creation error: " + cErr.message);
     }
@@ -270,6 +274,8 @@ function handleAttachments(data, sheet, rowIndex) {
   if (data.allImages && data.allImages.length > 0) list = data.allImages;
   else if (data.attachments && data.attachments.length > 0) list = data.attachments;
   else if (data.images && data.images.length > 0) list = data.images;
+
+  var photoFileIds = [];
 
   for (var i = 0; i < list.length; i++) {
     try {
@@ -290,40 +296,54 @@ function handleAttachments(data, sheet, rowIndex) {
       } catch (e) {}
 
       var fileId = file.getId();
+      photoFileIds.push(fileId);
       var directUrl = "https://lh3.googleusercontent.com/d/" + fileId;
-      var viewLink = "https://drive.google.com/file/d/" + fileId + "/view?usp=sharing";
-      photoViewLinks.push(viewLink);
+      var directZoomLink = "https://lh3.googleusercontent.com/d/" + fileId + "=s0";
+      photoViewLinks.push({ id: fileId, zoomUrl: directZoomLink, name: fName });
 
       if (!imageToEmbedUrl) {
         imageToEmbedUrl = directUrl;
-        primaryViewUrl = viewLink;
+        primaryViewUrl = directZoomLink;
       }
     } catch (attErr) {
       Logger.log("File " + i + " upload error: " + attErr.message);
     }
   }
 
-  // 5. Embed Image Formula in the Target Cell with Direct Click to Zoom
+  // 5. Embed Image Formula in Target Cell with Direct Click to Zoom (NO Google Drive Folder!)
   var cell = sheet.getRange(rowIndex, colIdx);
   if (imageToEmbedUrl) {
     try {
-      var destinationUrl = targetFolder.getUrl() || primaryViewUrl;
-      // Formula: =HYPERLINK("drive_link", IMAGE("lh3_link", 1))
-      cell.setFormula('=HYPERLINK("' + destinationUrl + '", IMAGE("' + imageToEmbedUrl + '", 1))');
+      var scriptUrl = "";
+      try {
+        scriptUrl = ScriptApp.getService().getUrl();
+      } catch (e) {}
+
+      var primaryId = cFileId || (photoFileIds.length > 0 ? photoFileIds[0] : "");
+      var directCdnZoomUrl = "https://lh3.googleusercontent.com/d/" + primaryId + "=s0";
+      
+      // If Web App is published, open interactive Zoom Lightbox with 1-10 photos gallery
+      // Otherwise fallback to direct high-res CDN zoom with native browser magnifier
+      var zoomDestinationUrl = (scriptUrl && scriptUrl.indexOf("http") === 0)
+        ? (scriptUrl + "?zoom=" + primaryId + "&folder=" + targetFolder.getId() + "&style=" + encodeURIComponent(cleanStyle) + "&round=" + round)
+        : directCdnZoomUrl;
+
+      // Formula: =HYPERLINK("zoom_url", IMAGE("lh3_link", 1))
+      cell.setFormula('=HYPERLINK("' + zoomDestinationUrl + '", IMAGE("' + imageToEmbedUrl + '", 1))');
       
       // Formatting for clean visibility
       sheet.setRowHeight(rowIndex, 85);
       sheet.setColumnWidth(colIdx, 115);
       cell.setHorizontalAlignment("center").setVerticalAlignment("middle");
 
-      // Cell Note with direct links to every single photo
+      // Cell Note with direct links to every single photo in full HD zoom
       var totalPhotos = photoViewLinks.length || (data.attachmentsCount || 1);
       var note = "📸 Fit Photos (" + totalPhotos + " Photos Attached):\\n";
-      note += "👉 Click cell to open & zoom full HD in Google Drive\\n\\n";
+      note += "👉 CLICK CELL TO ZOOM PHOTO DIRECTLY!\\n\\n";
       for (var k = 0; k < photoViewLinks.length; k++) {
-        note += "• Photo " + (k + 1) + ": " + photoViewLinks[k] + "\\n";
+        note += "• Photo " + (k + 1) + " (Zoom): " + photoViewLinks[k].zoomUrl + "\\n";
       }
-      note += "\\n📁 All Photos Folder: " + targetFolder.getUrl();
+      note += "\\n• Interactive Gallery: " + zoomDestinationUrl;
       cell.setNote(note);
 
     } catch (imgErr) {
@@ -502,6 +522,408 @@ function testRun() {
   Logger.log("Google Drive Folder: " + (folder ? folder.getName() : "None"));
 
   Logger.log("=== SUCCESS: Permissions authorized successfully! ===");
+}
+
+// Automatically adds menu in Google Sheets for instant in-sheet photo zoom
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu("📸 Fit Photos")
+      .addItem("🔍 Zoom Selected Photo (In-Sheet Dialog)", "showPhotoZoomDialog")
+      .addItem("🌐 Open Photo Zoom Viewer", "openPhotoZoomInNewTab")
+      .addToUi();
+  } catch (e) {}
+}
+
+// URL & ID Extraction Helpers (100% immune to regex escape bugs)
+function extractFileId(str) {
+  if (!str) return "";
+  var s = String(str);
+  var part = "";
+  var idx = s.indexOf("lh3.googleusercontent.com/d/");
+  if (idx !== -1) {
+    part = s.substring(idx + 28);
+  } else {
+    var zIdx = s.indexOf("zoom=");
+    if (zIdx !== -1) {
+      part = s.substring(zIdx + 5);
+    } else {
+      var fIdx = s.indexOf("/file/d/");
+      if (fIdx !== -1) {
+        part = s.substring(fIdx + 8);
+      }
+    }
+  }
+  if (!part) return "";
+  for (var i = 0; i < part.length; i++) {
+    var c = part.charAt(i);
+    var isAlpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    var isNum = (c >= '0' && c <= '9');
+    var isSpecial = (c === '_' || c === '-');
+    if (!isAlpha && !isNum && !isSpecial) {
+      return part.substring(0, i);
+    }
+  }
+  return part;
+}
+
+function extractFolderId(str) {
+  if (!str) return "";
+  var s = String(str);
+  var part = "";
+  var fIdx = s.indexOf("folder=");
+  if (fIdx !== -1) {
+    part = s.substring(fIdx + 7);
+  } else {
+    var foldIdx = s.indexOf("/folders/");
+    if (foldIdx !== -1) {
+      part = s.substring(foldIdx + 9);
+    }
+  }
+  if (!part) return "";
+  for (var i = 0; i < part.length; i++) {
+    var c = part.charAt(i);
+    var isAlpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    var isNum = (c >= '0' && c <= '9');
+    var isSpecial = (c === '_' || c === '-');
+    if (!isAlpha && !isNum && !isSpecial) {
+      return part.substring(0, i);
+    }
+  }
+  return part;
+}
+
+function extractHyperlinkUrl(str) {
+  if (!str) return "";
+  var s = String(str);
+  var start = s.indexOf('=HYPERLINK("');
+  if (start !== -1) {
+    var sub = s.substring(start + 12);
+    var end = sub.indexOf('"');
+    if (end !== -1) return sub.substring(0, end);
+  }
+  var httpIdx = s.indexOf("http://");
+  if (httpIdx === -1) httpIdx = s.indexOf("https://");
+  if (httpIdx !== -1) {
+    var urlPart = s.substring(httpIdx);
+    for (var i = 0; i < urlPart.length; i++) {
+      var ch = urlPart.charAt(i);
+      if (ch === '"' || ch === ')' || ch === ',' || ch === ' ' || ch === '\t' || ch === '\n') {
+        return urlPart.substring(0, i);
+      }
+    }
+    return urlPart;
+  }
+  return "";
+}
+
+// 1. Opens an interactive full-screen popup dialog right inside Google Sheets (No new tab!)
+function showPhotoZoomDialog() {
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var cell = sheet.getActiveCell();
+  var formula = cell.getFormula() || "";
+  var note = cell.getNote() || "";
+  
+  var fileId = extractFileId(formula) || extractFileId(note);
+  var folderId = extractFolderId(formula) || extractFolderId(note);
+  
+  if (!fileId && !folderId) {
+    SpreadsheetApp.getUi().alert("No fit photo found in this cell.\\n\\nPlease select a cell in Columns BI, BJ, BK, BL, or BM that contains a photo thumbnail.");
+    return;
+  }
+  
+  var photos = [];
+  if (folderId) {
+    try {
+      var folder = DriveApp.getFolderById(folderId);
+      var files = folder.getFiles();
+      while (files.hasNext()) {
+        var f = files.next();
+        var fId = f.getId();
+        var fName = f.getName();
+        if (f.getMimeType().indexOf("image") > -1) {
+          photos.push({
+            id: fId,
+            name: fName,
+            url: "https://lh3.googleusercontent.com/d/" + fId + "=s0",
+            thumb: "https://lh3.googleusercontent.com/d/" + fId + "=s200",
+            isGrid: fName.indexOf("Grid") > -1
+          });
+        }
+      }
+    } catch (e) {}
+  }
+  
+  if (photos.length === 0 && fileId) {
+    photos.push({
+      id: fileId,
+      name: "Fit Photo",
+      url: "https://lh3.googleusercontent.com/d/" + fileId + "=s0",
+      thumb: "https://lh3.googleusercontent.com/d/" + fileId + "=s200",
+      isGrid: false
+    });
+  }
+  
+  var html = buildZoomViewerHtml(photos, "Fit Photo Zoom", "", fileId);
+  var htmlOutput = HtmlService.createHtmlOutput(html)
+    .setWidth(950)
+    .setHeight(680);
+  SpreadsheetApp.getUi().showModalDialog(htmlOutput, "📸 Fit Photo Zoom Viewer");
+}
+
+function openPhotoZoomInNewTab() {
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var cell = sheet.getActiveCell();
+  var formula = cell.getFormula() || "";
+  var note = cell.getNote() || "";
+  
+  var url = extractHyperlinkUrl(formula) || extractHyperlinkUrl(note);
+               
+  if (url) {
+    var html = "<script>window.open('" + url + "', '_blank'); google.script.host.close();<" + "/script>" +
+               "<div style='font-family:sans-serif;padding:20px;text-align:center;'>Opening Photo Zoom Viewer...</div>";
+    var htmlOutput = HtmlService.createHtmlOutput(html).setWidth(300).setHeight(100);
+    SpreadsheetApp.getUi().showModalDialog(htmlOutput, "Opening Zoom...");
+  } else {
+    SpreadsheetApp.getUi().alert("Please select a photo cell in Columns BI-BM.");
+  }
+}
+
+// 2. Web App Interactive Photo Zoom Lightbox Viewer
+function renderPhotoZoomViewer(params) {
+  var fileId = params.zoom || "";
+  var folderId = params.folder || "";
+  var style = params.style || "Fit Sample";
+  var round = params.round || "1";
+  
+  var photos = [];
+  
+  if (folderId) {
+    try {
+      var folder = DriveApp.getFolderById(folderId);
+      var files = folder.getFiles();
+      while (files.hasNext()) {
+        var f = files.next();
+        var fId = f.getId();
+        var fName = f.getName();
+        if (f.getMimeType().indexOf("image") > -1) {
+          photos.push({
+            id: fId,
+            name: fName,
+            url: "https://lh3.googleusercontent.com/d/" + fId + "=s0",
+            thumb: "https://lh3.googleusercontent.com/d/" + fId + "=s200",
+            isGrid: fName.indexOf("Grid") > -1
+          });
+        }
+      }
+    } catch (e) {
+      Logger.log("Folder read error: " + e.message);
+    }
+  }
+  
+  if (photos.length === 0 && fileId) {
+    photos.push({
+      id: fileId,
+      name: "Fit Photo",
+      url: "https://lh3.googleusercontent.com/d/" + fileId + "=s0",
+      thumb: "https://lh3.googleusercontent.com/d/" + fileId + "=s200",
+      isGrid: false
+    });
+  }
+  
+  var html = buildZoomViewerHtml(photos, style, round, fileId);
+  return HtmlService.createHtmlOutput(html)
+    .setTitle("Fit Photo Zoom - " + style + " (R" + round + ")")
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag("viewport", "width=device-width, initial-scale=1.0, maximum-scale=5.0");
+}
+
+function buildZoomViewerHtml(photos, style, round, initialFileId) {
+  var photosJson = JSON.stringify(photos);
+  var html = '<!DOCTYPE html>' +
+    '<html><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">' +
+    '<title>' + escapeHtml(style) + ' Photo Zoom</title>' +
+    '<style>' +
+    '* { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }' +
+    'body { background: #090d16; color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }' +
+    'header { background: rgba(15, 23, 42, 0.95); border-bottom: 1px solid #1e293b; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; z-index: 10; }' +
+    '.title-group { display: flex; align-items: center; gap: 10px; }' +
+    '.badge { background: #4f46e5; color: #fff; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; }' +
+    '.title { font-size: 14px; font-weight: 600; color: #f8fafc; }' +
+    '.subtitle { font-size: 11px; color: #94a3b8; }' +
+    '.controls { display: flex; align-items: center; gap: 6px; }' +
+    '.btn { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 6px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; transition: all 0.15s; }' +
+    '.btn:hover { background: #334155; color: #fff; border-color: #475569; }' +
+    '.btn:active { transform: scale(0.96); }' +
+    '.btn-primary { background: #4338ca; border-color: #4f46e5; color: #fff; }' +
+    '.btn-primary:hover { background: #4f46e5; }' +
+    '.zoom-pct { font-size: 12px; font-variant-numeric: tabular-nums; color: #94a3b8; min-width: 44px; text-align: center; }' +
+    '.stage-container { flex: 1; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #070a11; cursor: grab; }' +
+    '.stage-container:active { cursor: grabbing; }' +
+    '#viewer-img { max-width: 100%; max-height: 100%; transform-origin: center center; transition: transform 0.05s ease-out; box-shadow: 0 20px 50px rgba(0,0,0,0.8); pointer-events: none; border-radius: 4px; }' +
+    '.hint-bar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); padding: 4px 14px; border-radius: 20px; font-size: 11px; color: #94a3b8; pointer-events: none; z-index: 5; white-space: nowrap; }' +
+    'footer { background: rgba(15, 23, 42, 0.95); border-top: 1px solid #1e293b; padding: 8px 16px; display: flex; align-items: center; gap: 10px; overflow-x: auto; z-index: 10; }' +
+    '.thumb { width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 2px solid transparent; cursor: pointer; flex-shrink: 0; opacity: 0.65; transition: all 0.15s; background: #1e293b; }' +
+    '.thumb:hover { opacity: 0.9; border-color: #64748b; }' +
+    '.thumb.active { opacity: 1; border-color: #6366f1; box-shadow: 0 0 10px rgba(99, 102, 241, 0.5); }' +
+    '.thumb img { width: 100%; height: 100%; object-fit: cover; }' +
+    '</style></head>' +
+    '<body>' +
+    '<header>' +
+    '  <div class="title-group">' +
+    '    <span class="badge">' + (round ? 'Round ' + escapeHtml(round) : 'Fit Photos') + '</span>' +
+    '    <div>' +
+    '      <div class="title">' + escapeHtml(style) + '</div>' +
+    '      <div class="subtitle" id="photo-counter">Loading photo...</div>' +
+    '    </div>' +
+    '  </div>' +
+    '  <div class="controls">' +
+    '    <button class="btn" onclick="zoomDelta(-0.25)" title="Zoom Out">🔍 -</button>' +
+    '    <span class="zoom-pct" id="zoom-level">100%</span>' +
+    '    <button class="btn" onclick="zoomDelta(0.25)" title="Zoom In">🔍 +</button>' +
+    '    <button class="btn" onclick="resetZoom()" title="Fit to Screen">⤢ Fit</button>' +
+    '    <button class="btn" onclick="setActualSize()" title="100% Actual Resolution">1:1 HD</button>' +
+    '    <button class="btn" onclick="rotateImage()" title="Rotate 90°">⟳ Rotate</button>' +
+    '    <button class="btn btn-primary" onclick="openOriginal()" title="Open Original Image">↗ Full Res</button>' +
+    '  </div>' +
+    '</header>' +
+    '<div class="stage-container" id="stage">' +
+    '  <div class="hint-bar">💡 Scroll to Zoom • Drag to Pan • Double-Click to Zoom In/Out</div>' +
+    '  <img id="viewer-img" src="" alt="Fit Photo">' +
+    '</div>' +
+    '<footer id="thumbs-bar"></footer>' +
+    '<script>' +
+    'var photos = ' + photosJson + ';' +
+    'var currentIndex = 0;' +
+    'var scale = 1;' +
+    'var posX = 0;' +
+    'var posY = 0;' +
+    'var rotation = 0;' +
+    'var isDragging = false;' +
+    'var startX = 0;' +
+    'var startY = 0;' +
+    'var stage = document.getElementById("stage");' +
+    'var img = document.getElementById("viewer-img");' +
+    'var zoomText = document.getElementById("zoom-level");' +
+    'var counter = document.getElementById("photo-counter");' +
+    'var thumbsBar = document.getElementById("thumbs-bar");' +
+    'function init() {' +
+    '  if (!photos || photos.length === 0) return;' +
+    '  for (var i = 0; i < photos.length; i++) {' +
+    '    if (photos[i].id === "' + initialFileId + '") { currentIndex = i; break; }' +
+    '  }' +
+    '  renderThumbs();' +
+    '  loadPhoto(currentIndex);' +
+    '  setupEvents();' +
+    '}' +
+    'function renderThumbs() {' +
+    '  thumbsBar.innerHTML = "";' +
+    '  photos.forEach(function(p, idx) {' +
+    '    var d = document.createElement("div");' +
+    '    d.className = "thumb" + (idx === currentIndex ? " active" : "");' +
+    '    d.title = p.isGrid ? "Composite Grid" : "Photo " + (idx + 1);' +
+    '    d.onclick = function() { loadPhoto(idx); };' +
+    '    var im = document.createElement("img");' +
+    '    im.src = p.thumb || p.url;' +
+    '    d.appendChild(im);' +
+    '    thumbsBar.appendChild(d);' +
+    '  });' +
+    '}' +
+    'function loadPhoto(idx) {' +
+    '  currentIndex = idx;' +
+    '  var p = photos[idx];' +
+    '  img.src = p.url;' +
+    '  resetZoom();' +
+    '  counter.textContent = (p.isGrid ? "Grid Overview" : "Photo " + (idx + 1) + " of " + photos.length) + " • " + (p.name || "");' +
+    '  var thumbs = document.querySelectorAll(".thumb");' +
+    '  thumbs.forEach(function(t, i) { t.className = "thumb" + (i === idx ? " active" : ""); });' +
+    '}' +
+    'function updateTransform() {' +
+    '  img.style.transform = "translate(" + posX + "px, " + posY + "px) scale(" + scale + ") rotate(" + rotation + "deg)";' +
+    '  zoomText.textContent = Math.round(scale * 100) + "%";' +
+    '}' +
+    'function zoomDelta(d) {' +
+    '  scale = Math.min(Math.max(scale + d, 0.2), 6);' +
+    '  updateTransform();' +
+    '}' +
+    'function resetZoom() {' +
+    '  scale = 1;' +
+    '  posX = 0;' +
+    '  posY = 0;' +
+    '  rotation = 0;' +
+    '  updateTransform();' +
+    '}' +
+    'function setActualSize() {' +
+    '  scale = (scale === 2) ? 1 : 2;' +
+    '  posX = 0;' +
+    '  posY = 0;' +
+    '  updateTransform();' +
+    '}' +
+    'function rotateImage() {' +
+    '  rotation = (rotation + 90) % 360;' +
+    '  updateTransform();' +
+    '}' +
+    'function openOriginal() {' +
+    '  if (photos[currentIndex]) window.open(photos[currentIndex].url, "_blank");' +
+    '}' +
+    'function setupEvents() {' +
+    '  stage.addEventListener("wheel", function(e) {' +
+    '    e.preventDefault();' +
+    '    var delta = e.deltaY < 0 ? 0.2 : -0.2;' +
+    '    zoomDelta(delta);' +
+    '  }, { passive: false });' +
+    '  stage.addEventListener("mousedown", function(e) {' +
+    '    if (e.button !== 0) return;' +
+    '    isDragging = true;' +
+    '    startX = e.clientX - posX;' +
+    '    startY = e.clientY - posY;' +
+    '  });' +
+    '  window.addEventListener("mousemove", function(e) {' +
+    '    if (!isDragging) return;' +
+    '    posX = e.clientX - startX;' +
+    '    posY = e.clientY - startY;' +
+    '    updateTransform();' +
+    '  });' +
+    '  window.addEventListener("mouseup", function() { isDragging = false; });' +
+    '  stage.addEventListener("dblclick", function(e) {' +
+    '    e.preventDefault();' +
+    '    if (scale > 1.2) resetZoom(); else { scale = 2.5; updateTransform(); }' +
+    '  });' +
+    '  var touchStartDist = 0;' +
+    '  var touchStartScale = 1;' +
+    '  stage.addEventListener("touchstart", function(e) {' +
+    '    if (e.touches.length === 1) {' +
+    '      isDragging = true;' +
+    '      startX = e.touches[0].clientX - posX;' +
+    '      startY = e.touches[0].clientY - posY;' +
+    '    } else if (e.touches.length === 2) {' +
+    '      isDragging = false;' +
+    '      touchStartDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);' +
+    '      touchStartScale = scale;' +
+    '    }' +
+    '  });' +
+    '  stage.addEventListener("touchmove", function(e) {' +
+    '    if (e.touches.length === 1 && isDragging) {' +
+    '      posX = e.touches[0].clientX - startX;' +
+    '      posY = e.touches[0].clientY - startY;' +
+    '      updateTransform();' +
+    '    } else if (e.touches.length === 2) {' +
+    '      var dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);' +
+    '      scale = Math.min(Math.max((dist / touchStartDist) * touchStartScale, 0.3), 5);' +
+    '      updateTransform();' +
+    '    }' +
+    '  });' +
+    '  stage.addEventListener("touchend", function() { isDragging = false; });' +
+    '}' +
+    'init();' +
+    '<' + '/script></body></html>';
+  return html;
+}
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }`;
 
 export function GoogleSheetsSetupModal() {
@@ -642,7 +1064,7 @@ export function GoogleSheetsSetupModal() {
                 Columns BI – BM (Cols 61–65)
               </div>
               <p className="text-[11px] text-emerald-700 leading-relaxed">
-                Live <strong>=IMAGE(...)</strong> thumbnail grid for <strong>1 to 10 photos</strong>. Click cell to open &amp; zoom in full HD on Google Drive!
+                Live <strong>=IMAGE(...)</strong> thumbnail grid for <strong>1 to 10 photos</strong>. Click cell to open <strong>Instant HD Zoom Lightbox</strong> (No Drive folder!). In-sheet zoom also via <strong>📸 Fit Photos</strong> menu.
               </p>
             </div>
           </div>

@@ -66,7 +66,20 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
   };
 
   const fetchSubmissions = async () => {
-    setLoading(true);
+    // Instant restore from cache if currently empty
+    try {
+      if (submissions.length === 0) {
+        const cached = localStorage.getItem('fit_submissions_cache');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setSubmissions(parsed);
+            setLoading(false);
+          }
+        }
+      }
+    } catch (e) {}
+
     try {
       // Try Supabase first with join for assignments
       const { data, error } = await supabase
@@ -84,6 +97,18 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
 
       if (data) {
         setSubmissions(data as any);
+        try {
+          localStorage.setItem('fit_submissions_cache', JSON.stringify(data));
+          data.forEach((sub: any) => {
+            localStorage.setItem(`fit_cache_sub_${sub.id}`, JSON.stringify(sub));
+            if (sub.assignments && Array.isArray(sub.assignments)) {
+              localStorage.setItem(`fit_cache_ass_list_${sub.id}`, JSON.stringify(sub.assignments));
+              sub.assignments.forEach((a: any) => {
+                localStorage.setItem(`fit_cache_ass_${a.id}`, JSON.stringify(a));
+              });
+            }
+          });
+        } catch (e) {}
       }
     } catch (err) {
       // Firestore Fallback
@@ -131,6 +156,18 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
           });
         }
         setSubmissions(docs);
+        try {
+          localStorage.setItem('fit_submissions_cache', JSON.stringify(docs));
+          docs.forEach((sub: any) => {
+            localStorage.setItem(`fit_cache_sub_${sub.id}`, JSON.stringify(sub));
+            if (sub.assignments && Array.isArray(sub.assignments)) {
+              localStorage.setItem(`fit_cache_ass_list_${sub.id}`, JSON.stringify(sub.assignments));
+              sub.assignments.forEach((a: any) => {
+                localStorage.setItem(`fit_cache_ass_${a.id}`, JSON.stringify(a));
+              });
+            }
+          });
+        } catch (e) {}
       } catch (fErr) {
         console.error("Firestore history fallback also failed:", fErr);
         toast.error("Failed to load submission history");

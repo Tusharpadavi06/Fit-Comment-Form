@@ -8,7 +8,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Badge } from './ui/badge';
-import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare, UploadCloud, X, FileText, Paperclip, Download, Copy, Send, Printer, Eye, EyeOff, ZoomIn, Maximize2 } from 'lucide-react';
+import { Loader2, CheckCircle2, Info, Calendar as CalendarIcon, MessageSquare, UploadCloud, X, FileText, Paperclip, Download, Copy, Send, Printer, Eye, EyeOff, ZoomIn, Maximize2, Camera, Image as ImageIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
 import { getSeriesFromStyleNumber, getDeterministicId } from '../lib/series-utils';
@@ -225,6 +225,8 @@ const getInitialFeedbackData = (sIdProp: string, aIdProp: string) => {
       const size = urlParams.get('size');
       const colorParam = urlParams.get('color');
       const givenDate = urlParams.get('givenDate') || urlParams.get('date');
+      const tabNameParam = urlParams.get('tabName') || urlParams.get('series') || '';
+      const samplePhotoParam = urlParams.get('samplePhoto') || urlParams.get('samplePhotoUrl') || '';
 
       // 1. Check local key-value caches
       const cachedSubStr = localStorage.getItem(`fit_cache_sub_${sId}`);
@@ -234,6 +236,13 @@ const getInitialFeedbackData = (sIdProp: string, aIdProp: string) => {
       const cachedAssStr = localStorage.getItem(`fit_cache_ass_${aId}`);
       if (cachedAssStr) {
         initialAss = JSON.parse(cachedAssStr);
+      }
+
+      // Check local sample photo cache
+      const cachedPhoto = localStorage.getItem(`fit_sample_photo_${sId}`) || 
+                          (styleNo ? localStorage.getItem(`fit_sample_photo_${styleNo.trim()}`) : null);
+      if (cachedPhoto && !initialSub?.sample_photo_url) {
+        initialSub = { ...(initialSub || {}), sample_photo_url: cachedPhoto };
       }
       
       // 2. Check assignment list cache for this submission
@@ -279,14 +288,21 @@ const getInitialFeedbackData = (sIdProp: string, aIdProp: string) => {
       }
 
       // 4. If URL has query parameters, synthesize or enhance initial values
-      if (styleNo || sampleType) {
+      const resolvedSeries = tabNameParam || initialSub?.series || getSeriesFromStyleNumber(styleNo || sId) || 'General';
+      const resolvedPhoto = samplePhotoParam || initialSub?.sample_photo_url || cachedPhoto || '';
+
+      if (styleNo || sampleType || tabNameParam || samplePhotoParam) {
         initialSub = {
           id: sId,
           style_number: styleNo || initialSub?.style_number || '',
           type_of_sample: sampleType || initialSub?.type_of_sample || '',
           description: initialSub?.description || '',
-          series: initialSub?.series || getSeriesFromStyleNumber(styleNo || sId) || 'General',
-          ...initialSub
+          series: resolvedSeries,
+          sample_photo_url: resolvedPhoto,
+          ...initialSub,
+          // ensure explicit priority
+          ...(tabNameParam ? { series: tabNameParam } : {}),
+          ...(resolvedPhoto ? { sample_photo_url: resolvedPhoto } : {})
         };
       }
       if (modelName || modelEmail || size || colorParam || givenDate) {
@@ -309,7 +325,8 @@ const getInitialFeedbackData = (sIdProp: string, aIdProp: string) => {
           style_number: styleNo || sId,
           type_of_sample: sampleType || 'Sample Fit',
           description: '',
-          series: getSeriesFromStyleNumber(styleNo || sId) || 'General'
+          series: resolvedSeries,
+          sample_photo_url: resolvedPhoto
         };
       }
       if (!initialAss && aId) {
@@ -337,6 +354,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const [isSyncing, setIsSyncing] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState(false);
   const [completed, setCompleted] = useState(false);
+  const [isTabClosed, setIsTabClosed] = useState(false);
   const [mailing, setMailing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -357,18 +375,58 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
   const [hasExistingSubmission, setHasExistingSubmission] = useState(false);
   const [showReportPreview, setShowReportPreview] = useState(false);
 
-  // Filter zoomable images from attachments
+  const sampleGarmentPhoto = React.useMemo(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const queryPhoto = urlParams.get('samplePhoto') || urlParams.get('samplePhotoUrl') || urlParams.get('sample_photo_url') || '';
+    const sId = (submissionId || '').trim();
+    const styleNo = submissionData?.style_number || submissionData?.styleNo || '';
+    const cachedPhoto = (typeof window !== 'undefined')
+      ? (localStorage.getItem(`fit_sample_photo_${sId}`) || 
+         (styleNo ? localStorage.getItem(`fit_sample_photo_${styleNo}`) : null) || 
+         (submissionData?.id ? localStorage.getItem(`fit_sample_photo_${submissionData.id}`) : null) || '')
+      : '';
+
+    return queryPhoto || 
+      submissionData?.sample_photo_url || 
+      submissionData?.samplePhotoUrl ||
+      submissionData?.sample_photo ||
+      submissionData?.samplePhoto ||
+      submissionData?.imageUrl ||
+      assignmentData?.sample_photo_url || 
+      assignmentData?.samplePhotoUrl || 
+      assignmentData?.sample_photo ||
+      assignmentData?.[`round${round}`]?.sample_photo_url || 
+      assignmentData?.[`round_${round}`]?.sample_photo_url || 
+      assignmentData?.round1?.sample_photo_url || 
+      assignmentData?.round_1?.sample_photo_url || 
+      cachedPhoto ||
+      '';
+  }, [submissionData, assignmentData, round, submissionId]);
+
+  // Filter zoomable images from attachments + sample photo
   const zoomableImages = React.useMemo(() => {
-    return attachments
+    const list: Array<{ id: string; name: string; url: string; size?: number; type?: string }> = [];
+    if (sampleGarmentPhoto) {
+      list.push({
+        id: 'sample-garment-photo',
+        name: `Sample Garment - Style ${submissionData?.style_number || ''}`,
+        url: sampleGarmentPhoto,
+        type: 'image/jpeg'
+      });
+    }
+    attachments
       .filter((a) => (a.dataUrl || (a as any).url) && (!a.type || a.type.startsWith('image/')))
-      .map((a) => ({
-        id: a.id,
-        name: a.name,
-        url: a.dataUrl || (a as any).url || '',
-        size: a.size,
-        type: a.type
-      }));
-  }, [attachments]);
+      .forEach((a) => {
+        list.push({
+          id: a.id,
+          name: a.name,
+          url: a.dataUrl || (a as any).url || '',
+          size: a.size,
+          type: a.type
+        });
+      });
+    return list;
+  }, [sampleGarmentPhoto, attachments, submissionData?.style_number]);
 
   const handleOpenZoom = (attIdOrUrl: string) => {
     const idx = zoomableImages.findIndex((img) => img.id === attIdOrUrl || img.url === attIdOrUrl);
@@ -547,12 +605,22 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           assData = sbData.ass;
         }
 
-        // Step 2: Only query Firestore if Supabase didn't find both records
-        if (!subData || !assData) {
+        // Step 2: Query Firestore if Supabase didn't find both records OR is missing sample_photo_url/series
+        if (!subData || !assData || !subData?.sample_photo_url || !subData?.series) {
           const fsData = await fetchFirestore();
           if (fsData) {
-            if (!subData) subData = fsData.sub;
-            if (!assData) assData = fsData.ass;
+            if (!subData) {
+              subData = fsData.sub;
+            } else if (fsData.sub) {
+              subData.sample_photo_url = subData.sample_photo_url || fsData.sub.sample_photo_url;
+              subData.series = subData.series || fsData.sub.series;
+            }
+            if (!assData) {
+              assData = fsData.ass;
+            } else if (fsData.ass) {
+              assData.sample_photo_url = assData.sample_photo_url || fsData.ass.sample_photo_url;
+              assData.series = assData.series || fsData.ass.series;
+            }
           }
         }
 
@@ -562,16 +630,26 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
 
         if (!isMounted) return;
 
+        const urlParams = new URLSearchParams(window.location.search);
+        const queryTabName = urlParams.get('tabName') || urlParams.get('series') || '';
+        const queryPhoto = urlParams.get('samplePhoto') || urlParams.get('samplePhotoUrl') || '';
+
         // Ensure keys are accessible via both snake_case and camelCase
         if (subData) {
           subData.style_number = subData.style_number || subData.styleNo || subData.styleNumber;
           subData.type_of_sample = subData.type_of_sample || subData.sampleType || subData.typeOfSample;
+          subData.series = queryTabName || subData.series || getSeriesFromStyleNumber(subData.style_number || '');
+          subData.sample_photo_url = queryPhoto || subData.sample_photo_url || localStorage.getItem(`fit_sample_photo_${sId}`) || localStorage.getItem(`fit_sample_photo_${subData.style_number}`) || '';
           setSubmissionData((prev: any) => ({ ...prev, ...subData }));
 
           try {
             localStorage.setItem(`fit_cache_sub_${sId}`, JSON.stringify(subData));
             if (subData.id && subData.id !== sId) {
               localStorage.setItem(`fit_cache_sub_${subData.id}`, JSON.stringify(subData));
+            }
+            if (subData.sample_photo_url) {
+              localStorage.setItem(`fit_sample_photo_${sId}`, subData.sample_photo_url);
+              if (subData.style_number) localStorage.setItem(`fit_sample_photo_${subData.style_number}`, subData.sample_photo_url);
             }
           } catch (e) {}
         }
@@ -580,6 +658,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           assData.model_name = assData.model_name || assData.modelName;
           assData.model_email = assData.model_email || assData.modelEmail;
           assData.given_for_fit_date = assData.given_for_fit_date || assData.givenForFitDate || '';
+          assData.series = queryTabName || assData.series || subData?.series || 'General';
           setAssignmentData((prev: any) => ({ ...prev, ...assData }));
 
           try {
@@ -980,14 +1059,19 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       const adminEditR4Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=4${fastParams}`;
       const adminEditR5Link = `${appBaseUrl}/?mode=edit&submissionId=${submissionId}&assignmentId=${aId}&round=5${fastParams}`;
 
-      const series = getSeriesFromStyleNumber(submissionData.style_number || submissionData.styleNo || "");
+      const urlParams = new URLSearchParams(window.location.search);
+      const queryTab = urlParams.get('tabName') || urlParams.get('series') || '';
+      const series = queryTab || submissionData.series || assignmentData?.series || getSeriesFromStyleNumber(submissionData.style_number || submissionData.styleNo || "") || "General";
       const collage = await generateCollageAttachment(attachments);
+
+      const targetFeedbackCol = round === "1" ? "BJ" : round === "2" ? "BL" : round === "3" ? "BN" : round === "4" ? "BP" : "BR";
 
       const sheetPayload = {
         assignmentId: assignmentId,
         submissionId: submissionId,
         sheetId: sheetId,
-        tabName: series || "General",
+        tabName: series,
+        series: series,
         senderEmail: userEmail,
         timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
         round: String(round),
@@ -1006,7 +1090,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         fabricTrims: fabricTrims,
         fabric_trims: fabricTrims,
         AX: assignmentId || aId,
-        attachmentColumn: round === "1" ? "BI" : round === "2" ? "BJ" : round === "3" ? "BK" : round === "4" ? "BL" : "BM",
+        attachmentColumn: targetFeedbackCol,
         attachmentsCount: attachments.length,
         attachments: attachments.map(a => ({
           name: a.name,
@@ -1026,12 +1110,12 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           data: (a.dataUrl || '').split(',')[1] || ''
         })),
         
-        // Direct column photo snapshot indicators
-        "BI": round === "1" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round1?.attachment_name || ""),
-        "BJ": round === "2" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round2?.attachment_name || ""),
-        "BK": round === "3" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round3?.attachment_name || ""),
-        "BL": round === "4" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round4?.attachment_name || ""),
-        "BM": round === "5" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round5?.attachment_name || ""),
+        // Direct column photo snapshot indicators (BJ for R1, BL for R2, BN for R3, BP for R4, BR for R5)
+        "BJ": round === "1" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round1?.attachment_name || ""),
+        "BL": round === "2" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round2?.attachment_name || ""),
+        "BN": round === "3" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round3?.attachment_name || ""),
+        "BP": round === "4" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round4?.attachment_name || ""),
+        "BR": round === "5" ? (attachments.length ? `${attachments.length} photo(s)` : "") : (assignmentData?.round5?.attachment_name || ""),
         // Removed explicit link from N, V, AD as per user request
         
         // Round 1 (G-M)
@@ -1324,6 +1408,38 @@ designer02@soie.in`;
     );
   }
 
+  if (isTabClosed) {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200 shadow-xl p-6 sm:p-8 text-center space-y-5 animate-in fade-in duration-300">
+          <div className="h-16 w-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-sm">
+            <CheckCircle2 className="h-9 w-9" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-bold text-slate-900">Feedback Safely Saved!</h2>
+            <p className="text-sm text-slate-600">
+              Your feedback for <strong>{getRoundName(round)}</strong> ({submissionData?.style_number || 'Style'}) has been recorded in the audit records and Google Sheet.
+            </p>
+          </div>
+          <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 text-left space-y-2 text-xs text-slate-600">
+            <p className="font-semibold text-slate-800">You can now safely exit this page:</p>
+            <p>• <strong>On Mobile:</strong> Swipe up or tap your browser tab icon to close this tab.</p>
+            <p>• <strong>On Computer:</strong> Press <kbd className="px-1.5 py-0.5 bg-white border rounded text-[11px]">Ctrl+W</kbd> (or <kbd className="px-1.5 py-0.5 bg-white border rounded text-[11px]">Cmd+W</kbd>) to close.</p>
+          </div>
+          <div className="pt-2 flex flex-col gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setIsTabClosed(false)}
+              className="w-full text-xs h-10 border-slate-300 text-slate-700 hover:bg-slate-50 font-medium"
+            >
+              ← Back to My Feedback Report
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (completed) {
     return (
       <div className="max-w-4xl mx-auto p-4 md:p-8 space-y-6 animate-in fade-in duration-300">
@@ -1351,14 +1467,11 @@ designer02@soie.in`;
               onClick={() => {
                 try {
                   window.close();
-                  setTimeout(() => {
-                    alert("You can safely close this browser tab.");
-                  }, 400);
-                } catch (e) {
-                  alert("Please close this browser tab.");
-                }
+                  window.self.close();
+                } catch (e) {}
+                setIsTabClosed(true);
               }}
-              className="w-full md:w-auto border-emerald-300 hover:bg-emerald-100 text-emerald-900 text-xs h-10 px-4 font-medium"
+              className="w-full md:w-auto border-emerald-300 hover:bg-emerald-100 text-emerald-900 text-xs h-10 px-5 font-bold shadow-xs cursor-pointer"
             >
               Close Tab
             </Button>
@@ -1579,6 +1692,47 @@ designer02@soie.in`;
               <p className="text-sm text-slate-600 italic">"{submissionData.description}"</p>
             </div>
           )}
+
+          {/* Sample Product Garment Photo (Attached in Main Form) */}
+          {sampleGarmentPhoto && (
+            <div className="pt-4 border-t">
+              <div className="p-3.5 bg-indigo-50/60 rounded-xl border border-indigo-200 flex flex-col sm:flex-row items-center gap-4">
+                <div 
+                  onClick={() => handleOpenZoom(sampleGarmentPhoto)}
+                  className="relative group cursor-pointer w-24 h-24 sm:w-28 sm:h-28 rounded-xl overflow-hidden border-2 border-indigo-300 shadow-sm shrink-0 bg-white"
+                  title="Click to Zoom Sample Photo"
+                >
+                  <img 
+                    src={sampleGarmentPhoto} 
+                    alt="Sample Product Garment" 
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform" 
+                  />
+                  <div className="absolute inset-0 bg-black/35 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                    <ZoomIn className="w-6 h-6 text-white" />
+                  </div>
+                </div>
+
+                <div className="space-y-1 text-center sm:text-left min-w-0">
+                  <Badge className="bg-indigo-600 text-white text-[10px] font-bold">
+                    📸 Product Sample Garment Photo
+                  </Badge>
+                  <h4 className="text-sm font-bold text-slate-900">
+                    Sample Photo for Style {submissionData.style_number}
+                  </h4>
+                  <p className="text-xs text-slate-600">
+                    Please inspect this sample photo while assessing the fit, fabric feel, and trims.
+                  </p>
+                  <button 
+                    type="button" 
+                    onClick={() => handleOpenZoom(sampleGarmentPhoto)} 
+                    className="text-xs text-indigo-700 hover:text-indigo-900 font-semibold underline flex items-center gap-1 mx-auto sm:mx-0 pt-0.5"
+                  >
+                    <Maximize2 className="w-3.5 h-3.5" /> Click Photo to Zoom in High Resolution
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -1694,50 +1848,88 @@ designer02@soie.in`;
                 Upload fit pictures, garment details, before/after wash comparison, or trims issues (JPG, PNG, WEBP, PDF - max 10MB per file).
               </p>
 
-              {/* Upload Dropzone */}
-              <div 
-                className="border-2 border-dashed border-slate-200 hover:border-primary/50 transition-colors rounded-xl p-6 text-center bg-slate-50/50 hover:bg-slate-50 flex flex-col items-center justify-center gap-2 cursor-pointer relative"
-                onClick={() => document.getElementById('file-upload-input')?.click()}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (e.dataTransfer.files) {
-                    handleFileUpload(e.dataTransfer.files);
-                  }
-                }}
-              >
-                <input 
-                  id="file-upload-input"
-                  type="file" 
-                  multiple 
-                  accept="image/*,application/pdf" 
-                  className="hidden"
-                  onChange={(e) => handleFileUpload(e.target.files)}
-                />
-                <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center text-primary">
-                  {uploadingFiles ? (
-                    <Loader2 className="w-6 h-6 animate-spin" />
-                  ) : (
-                    <UploadCloud className="w-6 h-6" />
-                  )}
+              {/* Native Mobile & Desktop Upload Controls */}
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Option 1: Native Mobile Camera Capture */}
+                  <div className="relative overflow-hidden flex items-center justify-center gap-2.5 px-4 py-3.5 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border-2 border-indigo-200 text-indigo-900 rounded-xl cursor-pointer transition-all shadow-xs group">
+                    <Camera className="w-5 h-5 text-indigo-600 shrink-0 pointer-events-none group-hover:scale-110 transition-transform" />
+                    <div className="text-left pointer-events-none">
+                      <p className="text-xs font-bold leading-tight">Take Photo (Camera)</p>
+                      <p className="text-[10px] text-indigo-700">Open mobile camera directly</p>
+                    </div>
+                    <input 
+                      id="mobile-camera-capture"
+                      type="file" 
+                      accept="image/*" 
+                      capture="environment"
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30"
+                      disabled={uploadingFiles}
+                      onChange={(e) => {
+                        handleFileUpload(e.target.files);
+                        e.target.value = '';
+                      }}
+                    />
+                  </div>
+
+                  {/* Option 2: Gallery or File Picker */}
+                  <div className="relative overflow-hidden flex items-center justify-center gap-2.5 px-4 py-3.5 bg-white hover:bg-slate-50 active:bg-slate-100 border-2 border-slate-300 text-slate-800 rounded-xl cursor-pointer transition-all shadow-xs group">
+                    <ImageIcon className="w-5 h-5 text-slate-600 shrink-0 pointer-events-none group-hover:scale-110 transition-transform" />
+                    <div className="text-left pointer-events-none">
+                      <p className="text-xs font-bold leading-tight">Upload from Gallery / Files</p>
+                      <p className="text-[10px] text-slate-500">Pick 1 or multiple photos (JPG, PNG)</p>
+                    </div>
+                    <input 
+                      id="mobile-gallery-picker"
+                      type="file" 
+                      multiple 
+                      accept="image/*,application/pdf"
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30"
+                      disabled={uploadingFiles}
+                      onChange={(e) => {
+                        handleFileUpload(e.target.files);
+                        e.target.value = '';
+                      }}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm font-semibold text-slate-800">
-                    {uploadingFiles ? 'Processing files...' : 'Click to browse or drag & drop files here'}
-                  </p>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Images are automatically optimized for rapid upload
-                  </p>
-                </div>
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  size="sm" 
-                  className="mt-1 h-8 text-xs pointer-events-none"
-                  disabled={uploadingFiles}
+
+                {/* Option 3: Unified Tap to Browse or Drag & Drop Zone (Works on Mobile & Desktop) */}
+                <div 
+                  className="relative overflow-hidden border-2 border-dashed border-indigo-200 hover:border-indigo-400 active:border-indigo-500 rounded-xl p-3.5 text-center bg-indigo-50/30 hover:bg-indigo-50/60 flex items-center justify-center gap-2.5 cursor-pointer transition-colors"
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files) {
+                      handleFileUpload(e.dataTransfer.files);
+                    }
+                  }}
                 >
-                  Select Photos or Documents
-                </Button>
+                  {uploadingFiles ? (
+                    <Loader2 className="w-5 h-5 animate-spin text-indigo-600 pointer-events-none" />
+                  ) : (
+                    <UploadCloud className="w-5 h-5 text-indigo-500 pointer-events-none" />
+                  )}
+                  <div className="pointer-events-none text-left sm:text-center">
+                    <p className="text-xs font-medium text-slate-700">
+                      {uploadingFiles ? 'Optimizing & attaching photos...' : 'Tap to browse or drag & drop files here'}
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      Works on mobile and PC • JPG, PNG, WEBP auto-compressed in HD
+                    </p>
+                  </div>
+                  <input 
+                    type="file" 
+                    multiple 
+                    accept="image/*,application/pdf"
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30"
+                    disabled={uploadingFiles}
+                    onChange={(e) => {
+                      handleFileUpload(e.target.files);
+                      e.target.value = '';
+                    }}
+                  />
+                </div>
               </div>
 
               {/* Attachment Preview Grid */}

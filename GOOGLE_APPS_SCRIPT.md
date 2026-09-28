@@ -74,11 +74,12 @@ If **both** `Code.gs` and `Snapped.gs` have `function doPost(e)`, Google Apps Sc
  * 5. Adds In-Sheet Zoom Dialog menu: "📸 Fit Photos > 🔍 Zoom Selected Photo (In-Sheet Dialog)".
  * 6. Adds Cell Notes with direct high-resolution zoom links to all individual photos (Photo 1 to 10).
  * 7. Target Columns:
- *    - Round 1: Column BI (61)
- *    - Round 2: Column BJ (62)
- *    - Round 3: Column BK (63)
- *    - Round 4: Column BL (64)
- *    - Round 5: Column BM (65)
+ *    - Round 1: Column BI (61) = Sample Garment Photo | Column BJ (62) = Model Fit Photos
+ *    - Round 2: Column BK (63) = Sample Garment Photo | Column BL (64) = Model Fit Photos
+ *    - Round 3: Column BM (65) = Sample Garment Photo | Column BN (66) = Model Fit Photos
+ *    - Round 4: Column BO (67) = Sample Garment Photo | Column BP (68) = Model Fit Photos
+ *    - Round 5: Column BQ (69) = Sample Garment Photo | Column BR (70) = Model Fit Photos
+ *    - Feedback Columns: Column N (R1), Column V (R2), Column AD (R3), Column AL (R4), Column AT (R5)
  *    - Assignment ID: Column AX (50)
  */
 
@@ -96,10 +97,15 @@ function doGet(e) {
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
+// Dual entry point: supports both doPost(e) and doPost_original(e)
 function doPost(e) {
+  return doPost_original(e);
+}
+
+function doPost_original(e) {
   var lock = LockService.getScriptLock();
   try {
-    // 1. Acquire lock for up to 30 seconds to prevent race conditions during parallel submissions
+    // 1. Acquire lock for 30 seconds to prevent race conditions during parallel submissions
     lock.waitLock(30000);
     
     if (!e || !e.postData || !e.postData.contents) {
@@ -127,132 +133,313 @@ function doPost(e) {
     }
     
     // 4. Identify the target sheet (Series based)
-    var sheetName = data.tabName || "General";
-    var sheet = getSheetWithHeaders(ss, sheetName);
-    
-    // 5. Find or create the row
-    var assignmentId = data.assignmentId || data.id;
+    var sheetName = data.tabName || data.series || "General";
+    var sheet = ss.getSheetByName(sheetName);
+    var assignmentId = data.assignmentId || data.id || data.AX;
     var row = -1;
     
-    // ALWAYS search for existing record if assignmentId is present (crucial for updating multi-round evaluations)
+    // Search for existing assignment across the spreadsheet if assignmentId is present (Column AX = 50)
     if (assignmentId) {
-      row = findRowByAssignmentId(sheet, assignmentId);
+      if (sheet) {
+        row = findRow(sheet, assignmentId);
+      }
+      // If not found in designated tab, search ALL tabs in the spreadsheet to avoid duplicate rows
+      if (row === -1) {
+        var allSheets = ss.getSheets();
+        for (var s = 0; s < allSheets.length; s++) {
+          var candidateSheet = allSheets[s];
+          var candidateRow = findRow(candidateSheet, assignmentId);
+          if (candidateRow !== -1) {
+            sheet = candidateSheet;
+            row = candidateRow;
+            break;
+          }
+        }
+      }
     }
     
-    // Fallback: search by Style Number and Model Name if not matched by ID
-    if (row === -1 && data.styleNo) {
-      row = findRowByStyleAndModel(sheet, data.styleNo, data.modelName);
+    // Fallback: search by Style No (Col D) and Model Name (Col B) across sheets
+    if (row === -1 && (data.styleNo || data.D)) {
+      if (sheet) {
+        row = findRowByStyle(sheet, data.styleNo || data.D, data.modelName || data.B);
+      }
+      if (row === -1) {
+        var allSheets = ss.getSheets();
+        for (var s = 0; s < allSheets.length; s++) {
+          var candidateSheet = allSheets[s];
+          var candidateRow = findRowByStyle(candidateSheet, data.styleNo || data.D, data.modelName || data.B);
+          if (candidateRow !== -1) {
+            sheet = candidateSheet;
+            row = candidateRow;
+            break;
+          }
+        }
+      }
+    }
+
+    // If still no sheet found, ensure the target sheet exists with headers
+    if (!sheet) {
+      sheet = getSheetWithHeaders(ss, sheetName);
     }
     
-    // If still not found, create a new row
+    // Ensure sheet has enough columns for all rounds + sample & fit photos (BI to BR = 61 to 70)
+    if (sheet.getMaxColumns() < 72) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), 72 - sheet.getMaxColumns());
+    }
+
     if (row === -1) {
+      // NEW SUBMISSION: Append a truly new row at the bottom
       row = sheet.getLastRow() + 1;
-      if (row <= 1) row = 2; // ensure we do not overwrite headers
+      
+      // Initialize basic identifying markers
+      updateCell(sheet, row, "AX", assignmentId); // ID in column AX (50)
+      updateCell(sheet, row, "A", data.timestamp || new Date());
+    } else {
+      if (assignmentId) {
+        updateCell(sheet, row, "AX", assignmentId);
+      }
     }
     
-    // 6. Map and write standard columns
+    // 6. UPDATE FIELDS (B-F are general)
+    updateCell(sheet, row, "B", data.modelName || data.model_name || data.B);
+    updateCell(sheet, row, "C", data.sampleType || data.typeOfSample || data.type_of_sample || data.C);
+    updateCell(sheet, row, "D", data.styleNo || data.style_number || data.D);
+    updateCell(sheet, row, "E", data.description || data.Instructions || data.E);
+    updateCell(sheet, row, "F", data.size || data.F);
+    
+    // 7. Update round-specific data (Revised to match user requested mapping)
     var round = String(data.round || "1");
     
-    // Base Assignment Metadata (Cols A to F)
-    updateCell(sheet, row, "A", data.timestamp || new Date());
-    updateCell(sheet, row, "B", data.modelName);
-    updateCell(sheet, row, "C", data.sampleType || (round + (round === '1' ? 'st' : round === '2' ? 'nd' : round === '3' ? 'rd' : 'th') + " Fit Sample"));
-    updateCell(sheet, row, "D", data.styleNo);
-    updateCell(sheet, row, "E", data.description);
-    updateCell(sheet, row, "F", data.size);
-    
-    // Assignment ID in Column AX (Column 50)
-    if (assignmentId) {
-      updateCell(sheet, row, "AX", assignmentId);
+    if (round === "1") {
+      updateCell(sheet, row, "G", data.color || data.G);
+      updateCell(sheet, row, "H", data.givenForFitDate || data.H);
+      updateCell(sheet, row, "I", data.receivedDate || data.received_date || data.I);
+      updateCell(sheet, row, "J", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.J);
+      updateCell(sheet, row, "K", data.beforeWash || data.before_wash || data.K);
+      updateCell(sheet, row, "L", data.afterWash || data.after_wash || data.L);
+      updateCell(sheet, row, "M", data.fabricComments || data.fabricTrims || data.fabric_trims || data.M);
+      updateCell(sheet, row, "N", data.feedback || data.comments || data.N);
+    } 
+    else if (round === "2") {
+      updateCell(sheet, row, "O", data.color || data.O);
+      updateCell(sheet, row, "P", data.givenForFitDate || data.P); 
+      updateCell(sheet, row, "Q", data.receivedDate || data.received_date || data.Q);
+      updateCell(sheet, row, "R", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.R);
+      updateCell(sheet, row, "S", data.beforeWash || data.before_wash || data.S);
+      updateCell(sheet, row, "T", data.afterWash || data.after_wash || data.T);
+      updateCell(sheet, row, "U", data.fabricComments || data.fabricTrims || data.fabric_trims || data.U);
+      updateCell(sheet, row, "V", data.feedback || data.comments || data.V);
+    } 
+    else if (round === "3") {
+      updateCell(sheet, row, "W", data.color || data.W); 
+      updateCell(sheet, row, "X", data.givenForFitDate || data.X); 
+      updateCell(sheet, row, "Y", data.receivedDate || data.received_date || data.Y);
+      updateCell(sheet, row, "Z", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.Z); 
+      updateCell(sheet, row, "AA", data.beforeWash || data.before_wash || data.AA);
+      updateCell(sheet, row, "AB", data.afterWash || data.after_wash || data.AB);
+      updateCell(sheet, row, "AC", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AC);
+      updateCell(sheet, row, "AD", data.feedback || data.comments || data.AD);
+    }
+    else if (round === "4") {
+      updateCell(sheet, row, "AE", data.color || data.AE); 
+      updateCell(sheet, row, "AF", data.givenForFitDate || data.AF); 
+      updateCell(sheet, row, "AG", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.AG); 
+      updateCell(sheet, row, "AH", data.receivedDate || data.received_date || data.AH);
+      updateCell(sheet, row, "AI", data.beforeWash || data.before_wash || data.AI);
+      updateCell(sheet, row, "AJ", data.afterWash || data.after_wash || data.AJ);
+      updateCell(sheet, row, "AK", data.fabricComments || data.fabricTrims || data.fabric_trims || data.AK);
+      updateCell(sheet, row, "AL", data.feedback || data.comments || data.AL);
+    }
+    else if (round === "5") {
+      updateCell(sheet, row, "AM", data.color || data.AM); 
+      updateCell(sheet, row, "AN", data.givenForFitDate || data.AN); 
+      updateCell(sheet, row, "AO", data.commentsDate || data.commentsReceivedDate || data.comments_received_date || data.AO); 
+      updateCell(sheet, row, "AP", data.receivedDate || data.received_date || data.AP);
+      updateCell(sheet, row, "AQ", data.beforeWash || data.before_wash || data.AQ);
+      updateCell(sheet, row, "AR", data.afterWash || data.after_wash || data.AR);
+      updateCell(sheet, row, "AS", data.fabricComments || data.fabricTrims || data.AS);
+      updateCell(sheet, row, "AT", data.feedback || data.comments || data.AT);
     }
     
-    // Dynamic Round Evaluation Columns
-    var roundColMap = {
-      "1": { color: "G", given: "H", commDate: "I", recvDate: "J", beforeWash: "K", afterWash: "L", fabric: "M" },
-      "2": { color: "O", given: "P", commDate: "Q", recvDate: "R", beforeWash: "S", afterWash: "T", fabric: "U" },
-      "3": { color: "W", given: "X", commDate: "Y", recvDate: "Z", beforeWash: "AA", afterWash: "AB", fabric: "AC" },
-      "4": { color: "AE", given: "AF", commDate: "AG", recvDate: "AH", beforeWash: "AI", afterWash: "AJ", fabric: "AK" },
-      "5": { color: "AM", given: "AN", commDate: "AO", recvDate: "AP", beforeWash: "AQ", afterWash: "AR", fabric: "AS" }
-    };
-    
-    var cols = roundColMap[round];
-    if (cols) {
-      if (data.color) updateCell(sheet, row, cols.color, data.color);
-      if (data.givenDate) updateCell(sheet, row, cols.given, data.givenDate);
-      if (data.commentsDate) updateCell(sheet, row, cols.commDate, data.commentsDate);
-      if (data.receivedDate) updateCell(sheet, row, cols.recvDate, data.receivedDate);
-      if (data.beforeWashRating || data.beforeWash) updateCell(sheet, row, cols.beforeWash, data.beforeWashRating || data.beforeWash);
-      if (data.afterWashRating || data.afterWash) updateCell(sheet, row, cols.afterWash, data.afterWashRating || data.afterWash);
-      if (data.fabricTrims) updateCell(sheet, row, cols.fabric, data.fabricTrims);
+    // 8. Handle Sample Garment Photo (Columns BI, BK, BM, BO, BQ)
+    if (data.samplePhoto || data.samplePhotoUrl || data.sample_photo) {
+      try {
+        handleSamplePhotoAttachment(data, sheet, row);
+      } catch (sampleErr) {
+        Logger.log("Sample photo handle error: " + sampleErr.message);
+      }
+    }
+
+    // 8b. Handle Model Feedback Fit Photos / Attachments (Columns BJ, BL, BN, BP, BR)
+    if (data.attachments || data.collageAttachment || data.allImages || data.images || data.attachment || data.photos) {
+      try {
+        handleAttachments(data, sheet, row);
+      } catch (photoErr) {
+        Logger.log("Attachment photo handle error: " + photoErr.message);
+      }
+    }
+
+    // 9. Handle automatic email notification
+    if (data.triggerEmail) {
+      sendMail(data);
     }
     
-    // 7. Multi-Photo Snapshots Upload & Direct-Zoom =IMAGE() Embed (Columns BI to BM)
-    handleAttachments(data, sheet, row, round);
+    return ContentService.createTextOutput("Success").setMimeType(ContentService.MimeType.TEXT);
     
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "success",
-      row: row,
-      message: "Row " + row + " updated successfully with Fit Comment & Photo Snapshots!"
-    })).setMimeType(ContentService.MimeType.JSON);
-    
-  } catch (error) {
-    Logger.log("doPost Error: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "error",
-      message: error.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log("doPost Error: " + err.message);
+    return ContentService.createTextOutput("Error: " + err.message).setMimeType(ContentService.MimeType.TEXT);
   } finally {
+    // 10. Always release the lock
     lock.releaseLock();
   }
 }
 
-/**
- * Uploads all attached photos (1 to 10 photos) to Google Drive
- * and embeds a click-to-zoom formula directly into columns BI to BM.
- */
-function handleAttachments(data, sheet, rowIndex, round) {
-  var photoColMap = {
-    "1": "BI", // Col 61
-    "2": "BJ", // Col 62
-    "3": "BK", // Col 63
-    "4": "BL", // Col 64
-    "5": "BM"  // Col 65
-  };
+// Uploads sample garment photo to Google Drive and embeds into Columns BI, BK, BM, BO, BQ
+function handleSamplePhotoAttachment(data, sheet, rowIndex) {
+  if (!data || !sheet || !rowIndex) return;
 
-  var colLetter = photoColMap[round];
-  if (!colLetter) return;
-  var colIdx = colNameToIndex(colLetter);
+  var round = String(data.round || "1");
+  var sampleColMap = { "1": "BI", "2": "BK", "3": "BM", "4": "BO", "5": "BQ" };
+  var targetCol = data.samplePhotoColumn || sampleColMap[round] || "BI";
+  var colIdx = colNameToIndex(targetCol);
+  if (colIdx <= 0) return;
 
-  var hasAttachments = (data.collageAttachment && data.collageAttachment.data) ||
-                       (data.allImages && data.allImages.length > 0) ||
-                       (data.attachments && data.attachments.length > 0) ||
-                       (data.images && data.images.length > 0);
-
-  if (!hasAttachments) return;
-
-  // 1. Get or create parent folder
-  var parentFolder = getOrCreatePhotoFolder(data.driveFolderId);
-  var cleanStyle = (data.styleNo || "UnknownStyle").replace(/[^a-zA-Z0-9_-]/g, "_");
-  var folderName = cleanStyle + "_R" + round + "_FitPhotos";
-  
-  // 2. Create subfolder for this style and round
-  var targetFolder = null;
-  var existingFolders = parentFolder.getFoldersByName(folderName);
-  if (existingFolders.hasNext()) {
-    targetFolder = existingFolders.next();
-  } else {
-    targetFolder = parentFolder.createFolder(folderName);
+  if (sheet.getMaxColumns() < colIdx) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), colIdx - sheet.getMaxColumns());
   }
+
+  var cell = sheet.getRange(rowIndex, colIdx);
+
+  if (data.samplePhotoUrl && (!data.samplePhoto || !data.samplePhoto.data)) {
+    cell.setFormula('=HYPERLINK("' + data.samplePhotoUrl + '", IMAGE("' + data.samplePhotoUrl + '", 1))');
+    sheet.setRowHeight(rowIndex, 85);
+    sheet.setColumnWidth(colIdx, 115);
+    cell.setHorizontalAlignment("center").setVerticalAlignment("middle");
+    cell.setNote("📸 Sample Garment Photo (Round " + round + "):\\n" + data.samplePhotoUrl);
+    return;
+  }
+
+  if (!data.samplePhoto) return;
+  var att = data.samplePhoto;
+  var rawData = att.data || att.dataUrl || att.base64;
+  if (!rawData && data.samplePhotoUrl) {
+    cell.setFormula('=HYPERLINK("' + data.samplePhotoUrl + '", IMAGE("' + data.samplePhotoUrl + '", 1))');
+    sheet.setRowHeight(rowIndex, 85);
+    sheet.setColumnWidth(colIdx, 115);
+    cell.setHorizontalAlignment("center").setVerticalAlignment("middle");
+    return;
+  }
+  if (!rawData) return;
+  if (rawData.indexOf(",") > -1) rawData = rawData.split(",")[1];
+
   try {
-    targetFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  } catch (e) {}
+    var folder = getOrCreatePhotoFolder(data.folderId);
+    var cleanStyle = String(data.styleNo || data.D || "Sample").replace(/[^a-zA-Z0-9_-]/g, "_");
+    var subFolderName = cleanStyle + "_Samples";
+    var targetFolder = folder;
+
+    try {
+      var subIter = folder.getFoldersByName(subFolderName);
+      if (subIter.hasNext()) {
+        targetFolder = subIter.next();
+      } else {
+        targetFolder = folder.createFolder(subFolderName);
+        try { targetFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+      }
+    } catch (errSub) {
+      targetFolder = folder;
+    }
+
+    var bytes = Utilities.base64Decode(rawData);
+    var isPng = (att.type && att.type.indexOf("png") > -1);
+    var ext = isPng ? ".png" : ".jpg";
+    var mime = isPng ? "image/png" : "image/jpeg";
+    var fName = cleanStyle + "_R" + round + "_Sample" + ext;
+    var blob = Utilities.newBlob(bytes, mime, fName);
+    var file = targetFolder.createFile(blob);
+    try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+
+    var fileId = file.getId();
+    var directUrl = "https://lh3.googleusercontent.com/d/" + fileId;
+    var directZoomLink = "https://lh3.googleusercontent.com/d/" + fileId + "=s0";
+
+    var scriptUrl = "";
+    try { scriptUrl = ScriptApp.getService().getUrl(); } catch (e) {}
+
+    var zoomDestinationUrl = "";
+    if (data.appUrl && data.appUrl.indexOf("http") === 0) {
+      zoomDestinationUrl = data.appUrl + "/?mode=zoom&fileId=" + fileId + "&url=" + encodeURIComponent(directZoomLink) + "&style=" + encodeURIComponent(cleanStyle) + "&round=" + round + "&subId=" + encodeURIComponent(data.assignmentId || "");
+    } else if (scriptUrl && scriptUrl.indexOf("http") === 0) {
+      zoomDestinationUrl = scriptUrl + "?zoom=" + fileId + "&folder=" + targetFolder.getId() + "&style=" + encodeURIComponent(cleanStyle) + "&round=" + round;
+    } else {
+      zoomDestinationUrl = directZoomLink;
+    }
+
+    cell.setFormula('=HYPERLINK("' + zoomDestinationUrl + '", IMAGE("' + directUrl + '", 1))');
+    sheet.setRowHeight(rowIndex, 85);
+    sheet.setColumnWidth(colIdx, 115);
+    cell.setHorizontalAlignment("center").setVerticalAlignment("middle");
+
+    var note = "📸 Sample Garment Photo (Round " + round + "):\\n";
+    note += "👉 CLICK CELL LINK to Zoom Sample Photo in Full HD!\\n";
+    note += "• File: " + directZoomLink + "\\n";
+    note += "• Folder: https://drive.google.com/drive/folders/" + targetFolder.getId();
+    cell.setNote(note);
+
+    if (!data.samplePhotoUrl) {
+      data.samplePhotoUrl = directUrl;
+    }
+  } catch (sampleErr) {
+    Logger.log("Error in handleSamplePhotoAttachment: " + sampleErr.message);
+  }
+}
+
+// Uploads photos to Google Drive and embeds snapshot directly into the cell (Columns BJ, BL, BN, BP, BR)
+function handleAttachments(data, sheet, rowIndex) {
+  if (!data || !sheet || !rowIndex) return;
+
+  var round = String(data.round || "1");
+  var colMap = { "1": "BJ", "2": "BL", "3": "BN", "4": "BP", "5": "BR" };
+  var targetCol = data.attachmentColumn || colMap[round] || "BJ";
+  var colIdx = colNameToIndex(targetCol);
+  if (colIdx <= 0) return;
+
+  if (sheet.getMaxColumns() < colIdx) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), colIdx - sheet.getMaxColumns());
+  }
+
+  // 1. Get or create root Drive Folder
+  var folder = getOrCreatePhotoFolder(data.folderId);
+  if (!folder) {
+    folder = DriveApp.getRootFolder();
+  }
+
+  var cleanStyle = String(data.styleNo || data.D || "Sample").replace(/[^a-zA-Z0-9_-]/g, "_");
+  var cleanModel = String(data.modelName || data.B || "Model").replace(/[^a-zA-Z0-9_-]/g, "_");
+  var subFolderName = cleanStyle + "_R" + round + "_" + cleanModel;
+  var targetFolder = folder;
+
+  // 2. Create subfolder for this Style + Round
+  try {
+    var subIter = folder.getFoldersByName(subFolderName);
+    if (subIter.hasNext()) {
+      targetFolder = subIter.next();
+    } else {
+      targetFolder = folder.createFolder(subFolderName);
+      try {
+        targetFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch (e) {}
+    }
+  } catch (errSub) {
+    targetFolder = folder;
+  }
 
   var imageToEmbedUrl = null;
   var primaryViewUrl = null;
-  var cFileId = null;
   var photoViewLinks = [];
 
-  // 3. Upload Composite Grid Thumbnail (if provided)
+  // 3. Upload Collage / Grid Snapshot if present
   if (data.collageAttachment && data.collageAttachment.data) {
     try {
       var cData = data.collageAttachment.data;
@@ -265,8 +452,7 @@ function handleAttachments(data, sheet, rowIndex, round) {
         cFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
       } catch (e) {}
       
-      cFileId = cFile.getId();
-      // CRITICAL: Google Sheets =IMAGE() MUST use https://lh3.googleusercontent.com/d/FILE_ID
+      var cFileId = cFile.getId();
       imageToEmbedUrl = "https://lh3.googleusercontent.com/d/" + cFileId;
       primaryViewUrl = "https://lh3.googleusercontent.com/d/" + cFileId + "=s0";
     } catch (cErr) {
@@ -315,7 +501,7 @@ function handleAttachments(data, sheet, rowIndex, round) {
     }
   }
 
-  // 5. Embed Image Formula in Target Cell with Direct Click to Zoom (NO Google Drive Folder!)
+  // 5. Embed Image Formula in Target Cell with Direct Click to Zoom
   var cell = sheet.getRange(rowIndex, colIdx);
   if (imageToEmbedUrl) {
     try {
@@ -327,8 +513,6 @@ function handleAttachments(data, sheet, rowIndex, round) {
       var primaryId = cFileId || (photoFileIds.length > 0 ? photoFileIds[0] : "");
       var directCdnZoomUrl = "https://lh3.googleusercontent.com/d/" + primaryId + "=s0";
       
-      // If Web App is published, open interactive Zoom Lightbox with 1-10 photos gallery
-      // Otherwise fallback to direct high-res CDN zoom with native browser magnifier
       var zoomDestinationUrl = (scriptUrl && scriptUrl.indexOf("http") === 0)
         ? (scriptUrl + "?zoom=" + primaryId + "&folder=" + targetFolder.getId() + "&style=" + encodeURIComponent(cleanStyle) + "&round=" + round)
         : directCdnZoomUrl;
@@ -343,12 +527,12 @@ function handleAttachments(data, sheet, rowIndex, round) {
 
       // Cell Note with direct links to every single photo in full HD zoom
       var totalPhotos = photoViewLinks.length || (data.attachmentsCount || 1);
-      var note = "📸 Fit Photos (" + totalPhotos + " Photos Attached):\n";
-      note += "👉 CLICK CELL TO ZOOM PHOTO DIRECTLY!\n\n";
+      var note = "📸 Fit Photos (" + totalPhotos + " Photos Attached):\\n";
+      note += "👉 CLICK CELL TO ZOOM PHOTO DIRECTLY!\\n\\n";
       for (var k = 0; k < photoViewLinks.length; k++) {
-        note += "• Photo " + (k + 1) + " (Zoom): " + photoViewLinks[k].zoomUrl + "\n";
+        note += "• Photo " + (k + 1) + " (Zoom): " + photoViewLinks[k].zoomUrl + "\\n";
       }
-      note += "\n• Interactive Gallery: " + zoomDestinationUrl;
+      note += "\\n• Interactive Gallery: " + zoomDestinationUrl;
       cell.setNote(note);
 
     } catch (imgErr) {
@@ -400,95 +584,81 @@ function getSheetWithHeaders(ss, sheetName) {
   var sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
     sheet = ss.insertSheet(sheetName);
-  }
-  
-  if (sheet.getLastRow() === 0) {
     var headers = [
-      "Timestamp", "Model Name", "Type of Sample", "Style No", "Description", "Size",
-      "R1 Color", "R1 Given Date", "R1 Comments Date", "R1 Recv Date", "R1 Before Wash", "R1 After Wash", "R1 Fabric/Trims",
-      "R1 Status",
-      "R2 Color", "R2 Given Date", "R2 Comments Date", "R2 Recv Date", "R2 Before Wash", "R2 After Wash", "R2 Fabric/Trims",
-      "R2 Status",
-      "R3 Color", "R3 Given Date", "R3 Comments Date", "R3 Recv Date", "R3 Before Wash", "R3 After Wash", "R3 Fabric/Trims",
-      "R3 Status",
-      "R4 Color", "R4 Given Date", "R4 Comments Date", "R4 Recv Date", "R4 Before Wash", "R4 After Wash", "R4 Fabric/Trims",
-      "R4 Status",
-      "R5 Color", "R5 Given Date", "R5 Comments Date", "R5 Recv Date", "R5 Before Wash", "R5 After Wash", "R5 Fabric/Trims"
+      "Timestamp", "Model Name", "Type of sample", "Style no", "Description", "Size", 
+      "R1 Color", "R1 Fit Date", "R1 Received", "R1 Comments Date", "R1 Before Wash", "R1 After Wash", "R1 Fabric/Trims", "R1 Feedback",
+      "R2 Color", "R2 Fit Date", "R2 Received", "R2 Comments Date", "R2 Before Wash", "R2 After Wash", "R2 Fabric/Trims", "R2 Feedback",
+      "R3 Color", "R3 Fit Date", "R3 Received", "R3 Comments Date", "R3 Before Wash", "R3 After Wash", "R3 Fabric/Trims", "R3 Feedback",
+      "R4 Color", "R4 Fit Date", "R4 Received", "R4 Comments Date", "R4 Before Wash", "R4 After Wash", "R4 Fabric/Trims", "R4 Feedback",
+      "R5 Color", "R5 Fit Date", "R5 Received", "R5 Comments Date", "R5 Before Wash", "R5 After Wash", "R5 Fabric/Trims", "R5 Feedback"
     ];
     sheet.appendRow(headers);
-    sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#f3f4f6");
     sheet.setFrozenRows(1);
-  }
-  
-  // Ensure Column AX header exists for ID tracking
-  var axIndex = colNameToIndex("AX");
-  if (sheet.getMaxColumns() < axIndex) {
-    sheet.insertColumnsAfter(sheet.getMaxColumns(), axIndex - sheet.getMaxColumns());
-  }
-  var axCell = sheet.getRange(1, axIndex);
-  if (!axCell.getValue()) {
-    axCell.setValue("Assignment ID").setFontWeight("bold").setBackground("#e0e7ff");
+    sheet.getRange(1, 1, 1, headers.length).setBackground("#f3f4f6").setFontWeight("bold");
   }
 
-  // Ensure Columns BI to BM headers exist for Photo Snapshots
-  var bmIndex = colNameToIndex("BM");
-  if (sheet.getMaxColumns() < bmIndex) {
-    sheet.insertColumnsAfter(sheet.getMaxColumns(), bmIndex - sheet.getMaxColumns());
-  }
-
-  var photoHeaders = [
-    { col: "BI", title: "R1 Photos" },
-    { col: "BJ", title: "R2 Photos" },
-    { col: "BK", title: "R3 Photos" },
-    { col: "BL", title: "R4 Photos" },
-    { col: "BM", title: "R5 Photos" }
-  ];
-
-  photoHeaders.forEach(function(h) {
-    var cIdx = colNameToIndex(h.col);
-    var cell = sheet.getRange(1, cIdx);
-    if (!cell.getValue()) {
-      cell.setValue(h.title).setFontWeight("bold").setBackground("#dcfce7");
+  // Ensure headers for photo columns BI to BR exist (BI to BR = 61 to 70) and AX (50)
+  try {
+    if (sheet.getMaxColumns() < 72) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), 72 - sheet.getMaxColumns());
     }
-  });
+
+    var axHeader = sheet.getRange(1, 50).getValue();
+    if (!axHeader) {
+      sheet.getRange(1, 50).setValue("Assignment ID (Internal)").setBackground("#e2e8f0").setFontWeight("bold");
+    }
+
+    var photoHeaders = {
+      "BI": "R1 Sample Photo",
+      "BJ": "R1 Fit Photos",
+      "BK": "R2 Sample Photo",
+      "BL": "R2 Fit Photos",
+      "BM": "R3 Sample Photo",
+      "BN": "R3 Fit Photos",
+      "BO": "R4 Sample Photo",
+      "BP": "R4 Fit Photos",
+      "BQ": "R5 Sample Photo",
+      "BR": "R5 Fit Photos"
+    };
+    for (var colKey in photoHeaders) {
+      var cIdx = colNameToIndex(colKey);
+      var currentVal = sheet.getRange(1, cIdx).getValue();
+      if (!currentVal) {
+        var isSample = (colKey === "BI" || colKey === "BK" || colKey === "BM" || colKey === "BO" || colKey === "BQ");
+        sheet.getRange(1, cIdx)
+          .setValue(photoHeaders[colKey])
+          .setBackground(isSample ? "#dbeafe" : "#e0e7ff")
+          .setFontWeight("bold");
+      }
+    }
+  } catch (e) {}
 
   return sheet;
 }
 
-function findRowByAssignmentId(sheet, targetId) {
-  if (!targetId) return -1;
-  var cleanTarget = String(targetId).trim().toLowerCase();
-  var axIndex = colNameToIndex("AX");
-  
-  if (sheet.getMaxColumns() < axIndex) return -1;
+function findRow(sheet, assignmentId) {
+  if (!assignmentId) return -1;
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return -1;
-  
-  var ids = sheet.getRange(2, axIndex, lastRow - 1, 1).getValues();
-  for (var i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]).trim().toLowerCase() === cleanTarget) {
-      return i + 2;
-    }
+  var ids = sheet.getRange(1, 50, lastRow, 1).getValues();
+  var targetId = String(assignmentId).trim().toLowerCase();
+  for (var i = 1; i < ids.length; i++) {
+    if (String(ids[i][0]).trim().toLowerCase() === targetId) return i + 1;
   }
   return -1;
 }
 
-function findRowByStyleAndModel(sheet, styleNo, modelName) {
-  if (!styleNo) return -1;
-  var targetStyle = String(styleNo).trim().toLowerCase();
-  var targetModel = modelName ? String(modelName).trim().toLowerCase() : "";
-  
+function findRowByStyle(sheet, styleNo, modelName) {
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return -1;
-  
+  var targetStyle = String(styleNo).trim().toLowerCase();
+  var targetModel = modelName ? String(modelName).trim().toLowerCase() : "";
   var data = sheet.getRange(2, 2, lastRow - 1, 3).getValues();
   for (var i = 0; i < data.length; i++) {
     var mName = String(data[i][0]).trim().toLowerCase();
     var sNo = String(data[i][2]).trim().toLowerCase();
-    if (sNo === targetStyle) {
-      if (!targetModel || mName === targetModel) {
-        return i + 2;
-      }
+    if (sNo === targetStyle && (!targetModel || mName === targetModel)) {
+      return i + 2;
     }
   }
   return -1;
@@ -496,7 +666,18 @@ function findRowByStyleAndModel(sheet, styleNo, modelName) {
 
 function updateCell(sheet, row, colName, value) {
   if (value === undefined || value === null || value === "") return;
-  var colIndex = colNameToIndex(colName);
+  var colMap = {
+    "A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7, "H": 8, "I": 9, "J": 10,
+    "K": 11, "L": 12, "M": 13, "N": 14, "O": 15, "P": 16, "Q": 17, "R": 18, "S": 19, "T": 20,
+    "U": 21, "V": 22, "W": 23, "X": 24, "Y": 25, "Z": 26, "AA": 27, "AB": 28, "AC": 29, "AD": 30,
+    "AE": 31, "AF": 32, "AG": 33, "AH": 34, "AI": 35, "AJ": 36, "AK": 37, "AL": 38, "AM": 39, "AN": 40,
+    "AO": 41, "AP": 42, "AQ": 43, "AR": 44, "AS": 45, "AT": 46, "AX": 50,
+    "BI": 61, "BJ": 62, "BK": 63, "BL": 64, "BM": 65, "BN": 66, "BO": 67, "BP": 68, "BQ": 69, "BR": 70
+  };
+  var colIndex = colMap[colName.toUpperCase()];
+  if (!colIndex) {
+    colIndex = colNameToIndex(colName);
+  }
   if (colIndex > 0) {
     if (sheet.getMaxColumns() < colIndex) {
       sheet.insertColumnsAfter(sheet.getMaxColumns(), colIndex - sheet.getMaxColumns());

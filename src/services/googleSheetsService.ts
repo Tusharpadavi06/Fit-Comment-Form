@@ -40,6 +40,7 @@ export async function saveToGoogleSheets(data: any) {
 
   const payload = {
     ...data,
+    appUrl: typeof window !== 'undefined' ? window.location.origin : '',
     sheetId: sheetId,
     timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
   };

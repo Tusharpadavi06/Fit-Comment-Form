@@ -1,12 +1,24 @@
-export const SERIES_LIST = [
-  "CB-101 Series",
-  "CB-201 Series",
-  "CB-301 Series",
-  "CB-401 Series",
-  "FB-501 Series",
-  "FB-601 Series",
-  "FB-701 Series",
-  "FB-801 Series",
+export const PRESET_SHEET_TABS = [
+  "Shapewear",
+  "Panty",
+  "Bra",
+  "Panty Packs",
+  "SC Series",
+  "CS Series",
+  "SHW Series",
+  "CB & CP-101 Series",
+  "CB & CP-201 Series",
+  "CB & CP-301 Series",
+  "CB & CP-401 Series",
+  "CB & CP-501 Series",
+  "CB & CP-601 Series",
+  "CB & CP-701 Series",
+  "CB & CP-801 Series",
+  "CB & CP-901 Series",
+  "FB & FP-501 Series",
+  "FB & FP-601 Series",
+  "FB & FP-701 Series",
+  "FB & FP-801 Series",
   "CB-901 Series",
   "CP-1101 Series",
   "CP-1201 Series",
@@ -17,10 +29,58 @@ export const SERIES_LIST = [
   "FP-1701 Series",
   "FP-1801 Series",
   "CP-1901 Series",
+  "General"
+];
+
+// Sample Photos attached in Main Form (Admin/Designer)
+export const SAMPLE_PHOTO_COLUMNS: Record<string, string> = {
+  "1": "BI",
+  "2": "BK",
+  "3": "BM",
+  "4": "BO",
+  "5": "BQ"
+};
+
+// Fit Photos attached in Feedback Form (Model)
+export const FEEDBACK_PHOTO_COLUMNS: Record<string, string> = {
+  "1": "BJ",
+  "2": "BL",
+  "3": "BN",
+  "4": "BP",
+  "5": "BR"
+};
+
+export const SERIES_LIST = [
+  "Shapewear",
+  "Panty",
+  "Bra",
   "Panty Packs",
   "SC Series",
   "CS Series",
-  "SHW Series"
+  "SHW Series",
+  "CB & CP-101 Series",
+  "CB & CP-201 Series",
+  "CB & CP-301 Series",
+  "CB & CP-401 Series",
+  "CB & CP-501 Series",
+  "CB & CP-601 Series",
+  "CB & CP-701 Series",
+  "CB & CP-801 Series",
+  "CB & CP-901 Series",
+  "FB & FP-501 Series",
+  "FB & FP-601 Series",
+  "FB & FP-701 Series",
+  "FB & FP-801 Series",
+  "CB-901 Series",
+  "CP-1101 Series",
+  "CP-1201 Series",
+  "CP-1301 Series",
+  "CP-1401 Series",
+  "CP-1501 Series",
+  "FP-1601 Series",
+  "FP-1701 Series",
+  "FP-1801 Series",
+  "CP-1901 Series"
 ];
 
 export function getSeriesFromStyleNumber(styleNo: string): string {
@@ -29,7 +89,10 @@ export function getSeriesFromStyleNumber(styleNo: string): string {
   const upper = styleNo.toUpperCase().trim();
   
   // Specific literal matches
-  if (upper.includes("PANTY")) return "Panty Packs";
+  if (upper.includes("SHAPEWEAR") || upper.startsWith("SHW") || upper.startsWith("SW-") || upper.startsWith("SW_")) return "Shapewear";
+  if (upper.includes("PANTY PACK") || upper.includes("PANTYPACK") || upper.includes("PANTY-PACK") || upper.includes("PANTY PACKS")) return "Panty Packs";
+  if (upper.includes("PANTY") || upper.startsWith("PNT") || upper.startsWith("PT-")) return "Panty";
+  if (upper.includes("BRA") || upper.startsWith("BR-") || upper.startsWith("BRA-")) return "Bra";
   if (upper.startsWith("SC")) return "SC Series";
   if (upper.startsWith("CS")) return "CS Series";
   if (upper.startsWith("SHW")) return "SHW Series";
@@ -41,7 +104,6 @@ export function getSeriesFromStyleNumber(styleNo: string): string {
     const num = parseInt(match[2], 10);
     if (!isNaN(num)) {
       if (prefix === "CB" || prefix === "CP") {
-        // 101-200 -> 101 Series, 201-300 -> 210 Series, etc.
         if (num >= 101 && num <= 200) return "CB & CP-101 Series";
         if (num >= 201 && num <= 300) return "CB & CP-201 Series";
         if (num >= 301 && num <= 400) return "CB & CP-301 Series";
@@ -50,12 +112,26 @@ export function getSeriesFromStyleNumber(styleNo: string): string {
         if (num >= 601 && num <= 700) return "CB & CP-601 Series";
         if (num >= 701 && num <= 800) return "CB & CP-701 Series";
         if (num >= 801 && num <= 900) return "CB & CP-801 Series";
-        if (num >= 901) return "CB & CP-901 Series";
+        if (prefix === "CB" && num >= 901 && num <= 1000) return "CB-901 Series";
+        if (num >= 901 && num <= 1000) return "CB & CP-901 Series";
+        if (prefix === "CP") {
+          if (num >= 1101 && num <= 1200) return "CP-1101 Series";
+          if (num >= 1201 && num <= 1300) return "CP-1201 Series";
+          if (num >= 1301 && num <= 1400) return "CP-1301 Series";
+          if (num >= 1401 && num <= 1500) return "CP-1401 Series";
+          if (num >= 1501 && num <= 1600) return "CP-1501 Series";
+          if (num >= 1901 && num <= 2000) return "CP-1901 Series";
+        }
       } else if (prefix === "FB" || prefix === "FP") {
         if (num >= 501 && num <= 600) return "FB & FP-501 Series";
         if (num >= 601 && num <= 700) return "FB & FP-601 Series";
         if (num >= 701 && num <= 800) return "FB & FP-701 Series";
         if (num >= 801 && num <= 900) return "FB & FP-801 Series";
+        if (prefix === "FP") {
+          if (num >= 1601 && num <= 1700) return "FP-1601 Series";
+          if (num >= 1701 && num <= 1800) return "FP-1701 Series";
+          if (num >= 1801 && num <= 1900) return "FP-1801 Series";
+        }
       }
     }
   }

@@ -6,12 +6,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Label } from './ui/label';
-import { Plus, Trash2, Send, Loader2, Info, RefreshCw, User } from 'lucide-react';
+import { Plus, Trash2, Send, Loader2, Info, RefreshCw, User, Camera, Paperclip, Image as ImageIcon, ZoomIn, X, ChevronDown, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from './ui/badge';
-import { getSeriesFromStyleNumber, getDeterministicId } from '../lib/series-utils';
+import { getSeriesFromStyleNumber, getDeterministicId, PRESET_SHEET_TABS, SAMPLE_PHOTO_COLUMNS } from '../lib/series-utils';
 import { v4 as uuidv4 } from 'uuid';
 import { saveToGoogleSheets } from '../services/googleSheetsService';
+import { ImageZoomModal } from './ImageZoomModal';
 import { db, auth, safeFirestoreWrite, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from '../lib/firebase';
 import { doc, setDoc, getDoc, getDocs, collection, query, where, serverTimestamp } from 'firebase/firestore';
 
@@ -59,6 +60,100 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   const [user, setUser] = useState<any>(null);
   const [deletedAssignmentIds, setDeletedAssignmentIds] = useState<string[]>([]);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
+
+  // Sheet Tab Selection state
+  const [selectedTabName, setSelectedTabName] = useState<string>('');
+  const [isCustomTab, setIsCustomTab] = useState<boolean>(false);
+  const [customTabName, setCustomTabName] = useState<string>('');
+  const [showTabSelector, setShowTabSelector] = useState<boolean>(false);
+
+  // Sample photo attachment state
+  const [samplePhoto, setSamplePhoto] = useState<{
+    name: string;
+    dataUrl: string;
+    size: number;
+    type: string;
+  } | null>(null);
+  const [sampleZoomOpen, setSampleZoomOpen] = useState<boolean>(false);
+  const [uploadingSample, setUploadingSample] = useState<boolean>(false);
+
+  const cameraInputRef = React.useRef<HTMLInputElement>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Handle sample photo upload or camera capture
+  const handleSamplePhotoChange = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error("File is too large (max 20MB)");
+      return;
+    }
+    setUploadingSample(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1200;
+          let width = img.width;
+          let height = img.height;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressed = canvas.toDataURL('image/jpeg', 0.82);
+            setSamplePhoto({
+              name: file.name || `sample_${styleNo || 'garment'}.jpg`,
+              dataUrl: compressed,
+              size: Math.round((compressed.length * 3) / 4),
+              type: 'image/jpeg'
+            });
+            toast.success("Sample garment photo attached!");
+          } else {
+            setSamplePhoto({
+              name: file.name,
+              dataUrl: e.target?.result as string,
+              size: file.size,
+              type: file.type || 'image/jpeg'
+            });
+            toast.success("Sample photo attached!");
+          }
+          setUploadingSample(false);
+        };
+        img.onerror = () => {
+          toast.error("Invalid image file");
+          setUploadingSample(false);
+        };
+        img.src = e.target?.result as string;
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error("Error processing sample photo:", err);
+      toast.error("Failed to read image file");
+      setUploadingSample(false);
+    }
+  };
+
+  // Sync detected sheet tab when styleNo changes if user has not picked a specific custom tab
+  useEffect(() => {
+    if (styleNo && !editMode && !isCustomTab) {
+      const autoSeries = getSeriesFromStyleNumber(styleNo);
+      if (!selectedTabName || selectedTabName === 'General') {
+        setSelectedTabName(autoSeries);
+      }
+    }
+  }, [styleNo, editMode]);
 
   // Listen for Style No changes to auto-detect existing submissions
   useEffect(() => {
@@ -214,6 +309,17 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         setTypeOfSample(finalSub.type_of_sample || '');
         setStyleNo(finalSub.style_number || '');
         setDescription(finalSub.description || '');
+        if (finalSub.series) {
+          setSelectedTabName(finalSub.series);
+        }
+        if (finalSub.sample_photo_url) {
+          setSamplePhoto({
+            name: `Sample Garment - ${finalSub.style_number || 'Style'}`,
+            dataUrl: finalSub.sample_photo_url,
+            size: 0,
+            type: 'image/jpeg'
+          });
+        }
       }
 
       if (finalAss && finalAss.length > 0) {
@@ -367,7 +473,9 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
     
     const submissionPromise = (async () => {
       let submissionId = existingSubmissionId;
-      const series = getSeriesFromStyleNumber(styleNo);
+      const targetTabName = (isCustomTab && customTabName.trim()) 
+        ? customTabName.trim() 
+        : (selectedTabName || getSeriesFromStyleNumber(styleNo) || "General");
 
       // Final check for submissionId if we don't have one (e.g. user ignored the toast)
       if (!submissionId) {
@@ -375,13 +483,67 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           .from('submissions')
           .select('id')
           .eq('style_number', styleNo.trim())
-          .eq('series', series || 'General')
+          .eq('series', targetTabName)
           .maybeSingle();
         
         if (existingSub) {
           submissionId = existingSub.id;
         } else {
           submissionId = uuidv4();
+        }
+      }
+
+      // Upload sample photo to Supabase storage if present
+      let uploadedSamplePhotoUrl = '';
+      if (samplePhoto && samplePhoto.dataUrl) {
+        try {
+          const base64Data = samplePhoto.dataUrl.split(',')[1] || '';
+          if (base64Data) {
+            const byteCharacters = atob(base64Data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: 'image/jpeg' });
+            const sFileName = `sample_${submissionId}_r${currentRound}_${Date.now()}.jpg`;
+            const sPath = `samples/${sFileName}`;
+
+            const { data: upRes, error: upErr } = await supabase.storage
+              .from('fit-attachments')
+              .upload(sPath, blob, { contentType: 'image/jpeg', upsert: true });
+
+            if (upErr) {
+              console.warn("Storage upload error for sample photo:", upErr);
+              // If bucket missing, attempt to create it
+              if (upErr.message?.includes('Bucket not found') || (upErr as any).statusCode === '404' || (upErr as any).error === 'Bucket not found') {
+                try {
+                  console.log("Attempting to auto-create 'fit-attachments' public bucket in Supabase...");
+                  const { error: bErr } = await supabase.storage.createBucket('fit-attachments', { public: true });
+                  if (!bErr) {
+                    const { data: retryRes, error: retryErr } = await supabase.storage
+                      .from('fit-attachments')
+                      .upload(sPath, blob, { contentType: 'image/jpeg', upsert: true });
+                    if (!retryErr && retryRes) {
+                      const { data: pubData } = supabase.storage
+                        .from('fit-attachments')
+                        .getPublicUrl(sPath);
+                      uploadedSamplePhotoUrl = pubData?.publicUrl || '';
+                    }
+                  }
+                } catch (bCreateErr) {
+                  console.warn("Could not auto-create bucket:", bCreateErr);
+                }
+              }
+            } else if (upRes) {
+              const { data: pubData } = supabase.storage
+                .from('fit-attachments')
+                .getPublicUrl(sPath);
+              uploadedSamplePhotoUrl = pubData?.publicUrl || '';
+            }
+          }
+        } catch (stErr) {
+          console.warn("Storage upload exception for sample photo:", stErr);
         }
       }
 
@@ -406,12 +568,25 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       const userEmail = user.email || 'Admin'; 
       const userName = user.displayName || userEmail;
 
+      // Cache sample photo locally so model form and preview can load it instantly
+      if (samplePhoto && samplePhoto.dataUrl) {
+        try {
+          localStorage.setItem(`fit_sample_photo_${submissionId}`, samplePhoto.dataUrl);
+          localStorage.setItem(`fit_sample_photo_${styleNo.trim()}`, samplePhoto.dataUrl);
+        } catch (e) {}
+      }
+
+      const samplePhotoQuery = (uploadedSamplePhotoUrl && uploadedSamplePhotoUrl.length > 5)
+        ? `&samplePhoto=${encodeURIComponent(uploadedSamplePhotoUrl)}` 
+        : '';
+
       const assignmentsWithLinks = validAssignments.map(a => {
         // Ensure the ID is deterministic based on current submission and model email
         // This forces merging in the database and Google Sheets
         const finalAId = getDeterministicId(submissionId!, a.modelEmail);
         const dateQuery = a.givenForFitDate?.trim() ? `&givenDate=${encodeURIComponent(a.givenForFitDate.trim())}` : '';
-        const metaQuery = `&styleNo=${encodeURIComponent(styleNo.trim())}&sampleType=${encodeURIComponent(typeOfSample)}&modelName=${encodeURIComponent(a.modelName)}&modelEmail=${encodeURIComponent(a.modelEmail)}&size=${encodeURIComponent(a.size || '')}&color=${encodeURIComponent(a.color || '')}`;
+        const tabQuery = `&tabName=${encodeURIComponent(targetTabName)}&series=${encodeURIComponent(targetTabName)}`;
+        const metaQuery = `&styleNo=${encodeURIComponent(styleNo.trim())}&sampleType=${encodeURIComponent(typeOfSample)}&modelName=${encodeURIComponent(a.modelName)}&modelEmail=${encodeURIComponent(a.modelEmail)}&size=${encodeURIComponent(a.size || '')}&color=${encodeURIComponent(a.color || '')}${tabQuery}${samplePhotoQuery}`;
         
         const r1Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=1${dateQuery}${metaQuery}`;
         const r2Link = `${modelFeedbackBaseUrl}/?submissionId=${submissionId}&assignmentId=${finalAId}&round=2${dateQuery}${metaQuery}`;
@@ -427,7 +602,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         style_number: styleNo.trim(),
         type_of_sample: typeOfSample,
         description: description,
-        series: series || 'General',
+        series: targetTabName,
+        sample_photo_url: uploadedSamplePhotoUrl || samplePhoto?.dataUrl || null,
         submitted_by: userEmail
       });
 
@@ -438,20 +614,22 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           style_number: styleNo.trim(),
           type_of_sample: typeOfSample,
           description: description,
-          series: series || 'General',
+          series: targetTabName,
+          sample_photo_url: uploadedSamplePhotoUrl || samplePhoto?.dataUrl || null,
           submitted_by: userEmail,
           updatedAt: serverTimestamp()
         }, { merge: true });
       });
 
       // 2. Supabase Assignments
+      const samplePhotoToStore = uploadedSamplePhotoUrl || samplePhoto?.dataUrl || null;
       const assPayload = assignmentsWithLinks.map(a => {
         // Dynamic assignment round specific updates during admin submission
-        const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r1Link } : a.round1Data;
-        const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r2Link } : a.round2Data;
-        const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r3Link } : a.round3Data;
-        const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r4Link } : a.round4Data;
-        const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r5Link } : a.round5Data;
+        const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r1Link, sample_photo_url: samplePhotoToStore } : a.round1Data;
+        const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r2Link, sample_photo_url: samplePhotoToStore } : a.round2Data;
+        const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r3Link, sample_photo_url: samplePhotoToStore } : a.round3Data;
+        const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r4Link, sample_photo_url: samplePhotoToStore } : a.round4Data;
+        const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate, link: a.r5Link, sample_photo_url: samplePhotoToStore } : a.round5Data;
 
         return {
           id: a.id,
@@ -461,6 +639,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           model_email: a.modelEmail,
           color: a.color,
           size: a.size,
+          sample_photo_url: samplePhotoToStore,
           r4_link: a.r4Link || null,
           r5_link: a.r5Link || null,
           // Preserve and update feedback data per round (including given_for_fit_date)
@@ -477,11 +656,11 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       if (assError) {
         console.warn("Supabase Assignments batch failed, trying fallback preserving rounds:", assError);
         const minimalAss = assignmentsWithLinks.map(a => {
-          const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round1Data;
-          const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round2Data;
-          const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round3Data;
-          const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round4Data;
-          const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round5Data;
+          const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate, sample_photo_url: samplePhotoToStore } : a.round1Data;
+          const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate, sample_photo_url: samplePhotoToStore } : a.round2Data;
+          const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate, sample_photo_url: samplePhotoToStore } : a.round3Data;
+          const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate, sample_photo_url: samplePhotoToStore } : a.round4Data;
+          const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate, sample_photo_url: samplePhotoToStore } : a.round5Data;
           return {
             id: a.id,
             submission_id: submissionId,
@@ -489,6 +668,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             model_email: a.modelEmail,
             color: a.color,
             size: a.size,
+            sample_photo_url: samplePhotoToStore,
             round1: r1 || null,
             round2: r2 || null,
             round3: r3 || null,
@@ -503,11 +683,11 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       // 2b. Firestore Assignments (Critical for ModelResponseView)
       safeFirestoreWrite(async () => {
         for (const a of assignmentsWithLinks) {
-          const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round1Data;
-          const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round2Data;
-          const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round3Data;
-          const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round4Data;
-          const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate } : a.round5Data;
+          const r1 = currentRound === '1' ? { ...a.round1Data, color: a.color, given_for_fit_date: a.givenForFitDate, sample_photo_url: samplePhotoToStore } : a.round1Data;
+          const r2 = currentRound === '2' ? { ...a.round2Data, color: a.color, given_for_fit_date: a.givenForFitDate, sample_photo_url: samplePhotoToStore } : a.round2Data;
+          const r3 = currentRound === '3' ? { ...a.round3Data, color: a.color, given_for_fit_date: a.givenForFitDate, sample_photo_url: samplePhotoToStore } : a.round3Data;
+          const r4 = currentRound === '4' ? { ...a.round4Data, color: a.color, given_for_fit_date: a.givenForFitDate, sample_photo_url: samplePhotoToStore } : a.round4Data;
+          const r5 = currentRound === '5' ? { ...a.round5Data, color: a.color, given_for_fit_date: a.givenForFitDate, sample_photo_url: samplePhotoToStore } : a.round5Data;
 
           await setDoc(doc(db, 'assignments', a.id), {
             id: a.id,
@@ -518,6 +698,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             color: a.color,
             size: a.size,
             given_for_fit_date: a.givenForFitDate,
+            sample_photo_url: samplePhotoToStore,
             r1_link: a.r1Link,
             r2_link: a.r2Link,
             r3_link: a.r3Link,
@@ -542,7 +723,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           type_of_sample: typeOfSample,
           sampleType: typeOfSample,
           description: description,
-          series: series || 'General',
+          series: targetTabName,
+          sample_photo_url: samplePhotoToStore,
           submitted_by: userEmail
         };
         localStorage.setItem(`fit_cache_sub_${submissionId}`, JSON.stringify(cachedSubObj));
@@ -556,6 +738,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             color: a.color,
             size: a.size,
             given_for_fit_date: a.givenForFitDate,
+            sample_photo_url: samplePhotoToStore,
             round1: a.round1Data,
             round2: a.round2Data,
             round3: a.round3Data,
@@ -569,11 +752,12 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       if (editMode && deletedAssignmentIds.length > 0) {
         console.log("Deleting assignments:", deletedAssignmentIds);
         await supabase.from('assignments').delete().in('id', deletedAssignmentIds);
-        // Firestore doesn't have a batch delete tool here but orphans are generally fine for this app
       }
 
       // 3. Google Sheets Sync
-      console.log(`Syncing ${assignmentsWithLinks.length} items to Google Sheets...`);
+      const targetSampleCol = SAMPLE_PHOTO_COLUMNS[currentRound] || "BI";
+      console.log(`Syncing ${assignmentsWithLinks.length} items to Google Sheets Tab: "${targetTabName}", Sample Col: "${targetSampleCol}"...`);
+      
       const results = await Promise.all(assignmentsWithLinks.map(async (a) => {
         const currentLink = currentRound === '2' ? a.r2Link : (currentRound === '3' ? a.r3Link : (currentRound === '4' ? a.r4Link : (currentRound === '5' ? a.r5Link : a.r1Link)));
         
@@ -608,12 +792,22 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           ...(currentRound === '5' ? { "AM": a.color || "", "AN": a.givenForFitDate || "" } : {}),
           link: currentLink,
           responseUrl: currentLink,
-          tabName: series || "General",
+          tabName: targetTabName,
           triggerEmail: true,
           senderEmail: userEmail,
           senderName: userName,
           timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
-          "AX": a.id
+          "AX": a.id,
+
+          // Target Column for Sample Attachment (BI for R1, BK for R2, BM for R3, BO for R4, BQ for R5)
+          samplePhotoColumn: targetSampleCol,
+          samplePhotoUrl: uploadedSamplePhotoUrl || '',
+          samplePhoto: samplePhoto ? {
+            name: samplePhoto.name,
+            data: samplePhoto.dataUrl.split(',')[1] || '',
+            type: samplePhoto.type
+          } : null,
+          [targetSampleCol]: samplePhoto ? (samplePhoto.name || 'Sample Photo Attached') : ''
         };
         return saveToGoogleSheets(payload);
       }));
@@ -636,6 +830,10 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         setSharedColor('');
         setSharedSize('');
         setAssignments([]);
+        setSelectedTabName('');
+        setIsCustomTab(false);
+        setCustomTabName('');
+        setSamplePhoto(null);
       }
 
       if (!allSuccess) {
@@ -919,25 +1117,268 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         <Card className="shadow-sm">
           <CardContent className="pt-6">
             <div className="space-y-4">
-              <Label className="text-base font-normal text-slate-900">
-                Style Number <span className="text-destructive ml-0.5">*</span>
-              </Label>
+              <div className="flex justify-between items-center">
+                <Label className="text-base font-normal text-slate-900">
+                  Style Number <span className="text-destructive ml-0.5">*</span>
+                </Label>
+                {styleNo && !editMode && (
+                  <button
+                    type="button"
+                    onClick={() => setShowTabSelector(!showTabSelector)}
+                    className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold underline flex items-center gap-1"
+                  >
+                    {showTabSelector ? "Hide Tab Selector" : "Change Sheet Tab"}
+                  </button>
+                )}
+              </div>
+              
               <Input 
-                placeholder="e.g. CB-101" 
+                placeholder="e.g. CB-101, SHW-01, PANTY-02" 
                 value={styleNo} 
-                onChange={e => setStyleNo(e.target.value)}
+                onChange={e => {
+                  const val = e.target.value;
+                  setStyleNo(val);
+                  if (!isCustomTab && val) {
+                    const detected = getSeriesFromStyleNumber(val);
+                    setSelectedTabName(detected);
+                    if (detected === "General") {
+                      setShowTabSelector(true);
+                    }
+                  }
+                }}
                 readOnly={editMode}
                 className={`border-0 border-b border-slate-200 rounded-none px-0 focus-visible:ring-0 focus-visible:border-primary transition-all bg-transparent h-10 text-base shadow-none ${editMode ? 'opacity-70 font-semibold' : ''}`}
                 required
               />
-              {styleNo && !editMode && (
-                <p className="text-[10px] text-slate-400 italic mt-1">
-                  Will be saved in Sheet Tab: <span className="text-primary font-medium">{getSeriesFromStyleNumber(styleNo) || "General"}</span>
-                </p>
+
+              {/* Sheet Tab Notification & Selection */}
+              {styleNo && (
+                <div className="space-y-2 pt-1">
+                  {/* Default / Quick Notice */}
+                  {(!showTabSelector && (selectedTabName || getSeriesFromStyleNumber(styleNo)) !== 'General') ? (
+                    <div className="flex items-center justify-between bg-slate-50 p-2.5 rounded-lg border text-xs text-slate-600">
+                      <span>
+                        Will be saved in Sheet Tab: <strong className="text-primary font-semibold">"{isCustomTab && customTabName ? customTabName : (selectedTabName || getSeriesFromStyleNumber(styleNo))}"</strong>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowTabSelector(true)}
+                        className="text-[11px] font-medium text-indigo-600 hover:underline"
+                      >
+                        Change Tab
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {/* Dropdown Box when style is General or user toggles Change Tab */}
+                  {(showTabSelector || (selectedTabName || getSeriesFromStyleNumber(styleNo)) === 'General') && !editMode && (
+                    <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/40 space-y-3 animate-in fade-in duration-200">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-950">
+                          <Info className="w-4 h-4 text-indigo-600" />
+                          <span>Select Target Sheet Tab for this Style:</span>
+                        </div>
+                        <Badge className="bg-indigo-600 text-white font-medium text-[10px]">
+                          Target Tab: {isCustomTab && customTabName ? customTabName : (selectedTabName || "General")}
+                        </Badge>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <Select
+                          value={isCustomTab ? "CUSTOM" : (selectedTabName || "General")}
+                          onValueChange={(val) => {
+                            if (val === "CUSTOM") {
+                              setIsCustomTab(true);
+                            } else {
+                              setIsCustomTab(false);
+                              setSelectedTabName(val);
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="h-9 bg-white text-xs border-indigo-200 font-medium">
+                            <SelectValue placeholder="Choose Sheet Tab (e.g. Shapewear, Panty)..." />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-72">
+                            <SelectItem value="CUSTOM" className="text-xs font-bold text-indigo-700 bg-indigo-50 border-b border-indigo-100">
+                              ✏️ + Type Custom Tab Name...
+                            </SelectItem>
+                            {PRESET_SHEET_TABS.map((tab) => (
+                              <SelectItem key={tab} value={tab} className="text-xs font-medium text-slate-800">
+                                {tab === "Shapewear" && "🩱 "}
+                                {tab === "Panty" && "🩲 "}
+                                {tab === "Bra" && "👙 "}
+                                {tab === "Panty Packs" && "📦 "}
+                                {tab === "General" && "📁 "}
+                                {!["Shapewear", "Panty", "Bra", "Panty Packs", "General"].includes(tab) && "📑 "}
+                                {tab}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+
+                        {isCustomTab ? (
+                          <Input
+                            placeholder="Enter Tab Name (e.g. Shapewear)"
+                            value={customTabName}
+                            onChange={(e) => setCustomTabName(e.target.value)}
+                            className="h-9 bg-white text-xs border-indigo-300 font-semibold"
+                            autoFocus
+                          />
+                        ) : (
+                          <div className="flex items-center text-[11px] text-slate-600 bg-white/70 px-2.5 rounded border border-indigo-100">
+                            Saving to: <strong className="text-indigo-700 ml-1">"{selectedTabName || 'General'}"</strong>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </CardContent>
         </Card>
+
+        {/* Sample Garment Photo Attachment Card */}
+        <Card className="shadow-sm border-indigo-100 bg-gradient-to-br from-white to-indigo-50/20">
+          <CardHeader className="py-4 px-6 pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                <Camera className="w-4 h-4 text-indigo-600" />
+                Sample Garment Attachment (Photo / Camera)
+              </CardTitle>
+              <Badge variant="outline" className="text-[10px] font-bold bg-white text-indigo-700 border-indigo-200">
+                Sheet Column: {SAMPLE_PHOTO_COLUMNS[currentRound] || 'BI'} (Round {currentRound})
+              </Badge>
+            </div>
+            <CardDescription className="text-[11px] text-slate-500">
+              Attach a photo of the sample garment. This image is sent in the notification email to models, displays in their feedback form, and embeds into Google Sheet Column <strong>{SAMPLE_PHOTO_COLUMNS[currentRound] || 'BI'}</strong>.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="px-6 pb-6 pt-2">
+            {/* Hidden inputs for camera capture & file picker */}
+            <input 
+              type="file" 
+              ref={cameraInputRef} 
+              accept="image/*" 
+              capture="environment" 
+              className="hidden" 
+              onChange={(e) => handleSamplePhotoChange(e.target.files)} 
+            />
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              accept="image/jpeg,image/png,image/jpg,image/webp" 
+              className="hidden" 
+              onChange={(e) => handleSamplePhotoChange(e.target.files)} 
+            />
+
+            {!samplePhoto ? (
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => cameraInputRef.current?.click()}
+                  disabled={uploadingSample}
+                  className="h-9 px-4 text-xs font-semibold border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 text-slate-700 flex items-center gap-1.5"
+                >
+                  <Camera className="w-4 h-4 text-indigo-600" />
+                  Take Photo (Camera)
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingSample}
+                  className="h-9 px-4 text-xs font-semibold border-slate-200 hover:bg-slate-50 text-slate-700 flex items-center gap-1.5"
+                >
+                  <Paperclip className="w-4 h-4 text-slate-500" />
+                  Upload Image (JPG / PNG)
+                </Button>
+
+                {uploadingSample && (
+                  <div className="flex items-center gap-1.5 text-xs text-indigo-600 animate-pulse">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Processing photo...</span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-3 bg-white rounded-xl border border-indigo-200 shadow-sm flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div 
+                    onClick={() => setSampleZoomOpen(true)}
+                    className="relative group cursor-pointer shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-slate-200 bg-slate-100"
+                  >
+                    <img 
+                      src={samplePhoto.dataUrl} 
+                      alt={samplePhoto.name} 
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform" 
+                    />
+                    <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <ZoomIn className="w-4 h-4 text-white" />
+                    </div>
+                  </div>
+
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs font-bold text-slate-900 truncate">{samplePhoto.name}</p>
+                      <Badge className="bg-emerald-600 text-white text-[9px] h-4 px-1.5 font-bold">Attached</Badge>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      {samplePhoto.size ? `${Math.round(samplePhoto.size / 1024)} KB` : 'Ready'} • Saved to Column <strong>{SAMPLE_PHOTO_COLUMNS[currentRound] || 'BI'}</strong>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setSampleZoomOpen(true)}
+                      className="text-[11px] font-semibold text-indigo-600 hover:underline flex items-center gap-1"
+                    >
+                      <ZoomIn className="w-3 h-3" /> Click to Zoom Photo
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => cameraInputRef.current?.click()}
+                    className="h-8 text-xs text-slate-600 hover:text-slate-900"
+                    title="Retake photo"
+                  >
+                    Retake
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setSamplePhoto(null)}
+                    className="h-8 w-8 text-slate-400 hover:text-destructive hover:bg-destructive/10"
+                    title="Remove photo"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Modal Zoom for Sample Photo Preview */}
+        {samplePhoto && (
+          <ImageZoomModal
+            isOpen={sampleZoomOpen}
+            onClose={() => setSampleZoomOpen(false)}
+            images={[{
+              url: samplePhoto.dataUrl,
+              name: samplePhoto.name || `Sample Product - Style ${styleNo}`
+            }]}
+            initialIndex={0}
+          />
+        )}
 
       {/* Assignment Section - Show model selector always */}
       <div className="space-y-4 pt-2">

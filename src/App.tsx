@@ -12,6 +12,7 @@ import { FormTab } from './components/FormTab';
 import { ManageModelsTab } from './components/ManageModelsTab';
 import { HistoryTab } from './components/HistoryTab';
 import { ModelResponseView } from './components/ModelResponseView';
+import { StandalonePhotoZoomView } from './components/StandalonePhotoZoomView';
 import { GoogleSheetsSetupModal } from './components/GoogleSheetsSetupModal';
 import { Toaster } from './components/ui/sonner';
 import { supabase } from './lib/supabase';
@@ -94,6 +95,16 @@ export default function App() {
   const assignmentId = query.get('assignmentId');
   const round = query.get('round');
   const mode = query.get('mode');
+
+  // If viewing standalone photo zoom (e.g. clicked from Google Sheets or direct link)
+  if (mode === 'zoom' || mode === 'photoZoom') {
+    return (
+      <div className="min-h-screen bg-[#070a11]">
+        <Toaster />
+        <StandalonePhotoZoomView />
+      </div>
+    );
+  }
 
   // If viewing a model response link (submissionId + assignmentId, but NOT in edit mode)
   if (submissionId && assignmentId && mode !== 'edit') {

@@ -60,6 +60,7 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
   const [user, setUser] = useState<any>(null);
   const [deletedAssignmentIds, setDeletedAssignmentIds] = useState<string[]>([]);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
+  const [notifyModelsOnUpdate, setNotifyModelsOnUpdate] = useState<boolean>(true);
 
   // Sheet Tab Selection state
   const [selectedTabName, setSelectedTabName] = useState<string>('');
@@ -312,10 +313,17 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         if (finalSub.series) {
           setSelectedTabName(finalSub.series);
         }
-        if (finalSub.sample_photo_url) {
+
+        const existingPhoto = finalSub.sample_photo_url ||
+          (finalAss && finalAss.find((a: any) => a.sample_photo_url)?.sample_photo_url) ||
+          (finalAss && finalAss.find((a: any) => a.round1?.sample_photo_url)?.round1?.sample_photo_url) ||
+          localStorage.getItem(`fit_sample_photo_${id}`) ||
+          (finalSub.style_number ? localStorage.getItem(`fit_sample_photo_${finalSub.style_number}`) : null);
+
+        if (existingPhoto) {
           setSamplePhoto({
             name: `Sample Garment - ${finalSub.style_number || 'Style'}`,
-            dataUrl: finalSub.sample_photo_url,
+            dataUrl: existingPhoto,
             size: 0,
             type: 'image/jpeg'
           });
@@ -496,54 +504,58 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       // Upload sample photo to Supabase storage if present
       let uploadedSamplePhotoUrl = '';
       if (samplePhoto && samplePhoto.dataUrl) {
-        try {
-          const base64Data = samplePhoto.dataUrl.split(',')[1] || '';
-          if (base64Data) {
-            const byteCharacters = atob(base64Data);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-              byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }
-            const byteArray = new Uint8Array(byteNumbers);
-            const blob = new Blob([byteArray], { type: 'image/jpeg' });
-            const sFileName = `sample_${submissionId}_r${currentRound}_${Date.now()}.jpg`;
-            const sPath = `samples/${sFileName}`;
-
-            const { data: upRes, error: upErr } = await supabase.storage
-              .from('fit-attachments')
-              .upload(sPath, blob, { contentType: 'image/jpeg', upsert: true });
-
-            if (upErr) {
-              console.warn("Storage upload error for sample photo:", upErr);
-              // If bucket missing, attempt to create it
-              if (upErr.message?.includes('Bucket not found') || (upErr as any).statusCode === '404' || (upErr as any).error === 'Bucket not found') {
-                try {
-                  console.log("Attempting to auto-create 'fit-attachments' public bucket in Supabase...");
-                  const { error: bErr } = await supabase.storage.createBucket('fit-attachments', { public: true });
-                  if (!bErr) {
-                    const { data: retryRes, error: retryErr } = await supabase.storage
-                      .from('fit-attachments')
-                      .upload(sPath, blob, { contentType: 'image/jpeg', upsert: true });
-                    if (!retryErr && retryRes) {
-                      const { data: pubData } = supabase.storage
-                        .from('fit-attachments')
-                        .getPublicUrl(sPath);
-                      uploadedSamplePhotoUrl = pubData?.publicUrl || '';
-                    }
-                  }
-                } catch (bCreateErr) {
-                  console.warn("Could not auto-create bucket:", bCreateErr);
-                }
+        if (samplePhoto.dataUrl.startsWith('http://') || samplePhoto.dataUrl.startsWith('https://')) {
+          uploadedSamplePhotoUrl = samplePhoto.dataUrl;
+        } else {
+          try {
+            const base64Data = samplePhoto.dataUrl.split(',')[1] || '';
+            if (base64Data) {
+              const byteCharacters = atob(base64Data);
+              const byteNumbers = new Array(byteCharacters.length);
+              for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
               }
-            } else if (upRes) {
-              const { data: pubData } = supabase.storage
+              const byteArray = new Uint8Array(byteNumbers);
+              const blob = new Blob([byteArray], { type: 'image/jpeg' });
+              const sFileName = `sample_${submissionId}_r${currentRound}_${Date.now()}.jpg`;
+              const sPath = `samples/${sFileName}`;
+
+              const { data: upRes, error: upErr } = await supabase.storage
                 .from('fit-attachments')
-                .getPublicUrl(sPath);
-              uploadedSamplePhotoUrl = pubData?.publicUrl || '';
+                .upload(sPath, blob, { contentType: 'image/jpeg', upsert: true });
+
+              if (upErr) {
+                console.warn("Storage upload error for sample photo:", upErr);
+                // If bucket missing, attempt to create it
+                if (upErr.message?.includes('Bucket not found') || (upErr as any).statusCode === '404' || (upErr as any).error === 'Bucket not found') {
+                  try {
+                    console.log("Attempting to auto-create 'fit-attachments' public bucket in Supabase...");
+                    const { error: bErr } = await supabase.storage.createBucket('fit-attachments', { public: true });
+                    if (!bErr) {
+                      const { data: retryRes, error: retryErr } = await supabase.storage
+                        .from('fit-attachments')
+                        .upload(sPath, blob, { contentType: 'image/jpeg', upsert: true });
+                      if (!retryErr && retryRes) {
+                        const { data: pubData } = supabase.storage
+                          .from('fit-attachments')
+                          .getPublicUrl(sPath);
+                        uploadedSamplePhotoUrl = pubData?.publicUrl || '';
+                      }
+                    }
+                  } catch (bCreateErr) {
+                    console.warn("Could not auto-create bucket:", bCreateErr);
+                  }
+                }
+              } else if (upRes) {
+                const { data: pubData } = supabase.storage
+                  .from('fit-attachments')
+                  .getPublicUrl(sPath);
+                uploadedSamplePhotoUrl = pubData?.publicUrl || '';
+              }
             }
+          } catch (stErr) {
+            console.warn("Storage upload exception for sample photo:", stErr);
           }
-        } catch (stErr) {
-          console.warn("Storage upload exception for sample photo:", stErr);
         }
       }
 
@@ -571,8 +583,14 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       // Cache sample photo locally so model form and preview can load it instantly
       if (samplePhoto && samplePhoto.dataUrl) {
         try {
-          localStorage.setItem(`fit_sample_photo_${submissionId}`, samplePhoto.dataUrl);
-          localStorage.setItem(`fit_sample_photo_${styleNo.trim()}`, samplePhoto.dataUrl);
+          const photoToCache = uploadedSamplePhotoUrl || samplePhoto.dataUrl;
+          localStorage.setItem(`fit_sample_photo_${submissionId}`, photoToCache);
+          localStorage.setItem(`fit_sample_photo_${styleNo.trim()}`, photoToCache);
+        } catch (e) {}
+      } else {
+        try {
+          localStorage.removeItem(`fit_sample_photo_${submissionId}`);
+          localStorage.removeItem(`fit_sample_photo_${styleNo.trim()}`);
         } catch (e) {}
       }
 
@@ -793,7 +811,8 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           link: currentLink,
           responseUrl: currentLink,
           tabName: targetTabName,
-          triggerEmail: true,
+          triggerEmail: editMode ? notifyModelsOnUpdate : true,
+          isUpdate: editMode,
           senderEmail: userEmail,
           senderName: userName,
           timestamp: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
@@ -801,10 +820,10 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
 
           // Target Column for Sample Attachment (BI for R1, BK for R2, BM for R3, BO for R4, BQ for R5)
           samplePhotoColumn: targetSampleCol,
-          samplePhotoUrl: uploadedSamplePhotoUrl || '',
+          samplePhotoUrl: uploadedSamplePhotoUrl || (samplePhoto?.dataUrl?.startsWith('http') ? samplePhoto.dataUrl : ''),
           samplePhoto: samplePhoto ? {
             name: samplePhoto.name,
-            data: samplePhoto.dataUrl.split(',')[1] || '',
+            data: samplePhoto.dataUrl.startsWith('data:') ? (samplePhoto.dataUrl.split(',')[1] || '') : '',
             type: samplePhoto.type
           } : null,
           [targetSampleCol]: samplePhoto ? (samplePhoto.name || 'Sample Photo Attached') : ''
@@ -967,8 +986,24 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             </CardContent>
           </Card>
 
-          <div className="flex justify-start gap-4">
-            <Button variant="ghost" className="text-primary" onClick={() => setLastSubmission(null)}>
+          <div className="flex flex-wrap items-center gap-3 pt-2">
+            <Button 
+              variant="outline" 
+              className="text-amber-800 border-amber-300 bg-amber-50 hover:bg-amber-100 font-semibold shadow-sm"
+              onClick={() => {
+                const subId = lastSubmission.id;
+                const rnd = lastSubmission.round;
+                setLastSubmission(null);
+                setEditMode(true);
+                setExistingSubmissionId(subId);
+                setCurrentRound(rnd);
+                loadExistingSubmission(subId, rnd);
+              }}
+            >
+              ✏️ Edit / Correct Details
+            </Button>
+
+            <Button variant="ghost" className="text-primary hover:bg-primary/5" onClick={() => setLastSubmission(null)}>
               Submit another response
             </Button>
             {Number(lastSubmission.round) < 5 && (
@@ -1093,25 +1128,30 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
             <p className="text-slate-600 font-medium animate-pulse">Loading previous round data...</p>
           </div>
         )}
-        {/* Sample Type Card - Hidden in Edit Mode for focus */}
-        {!editMode && (
-          <Card className="shadow-sm">
-            <CardContent className="pt-6">
-              <div className="space-y-4">
+        {/* Sample Type Card - Always visible and editable */}
+        <Card className="shadow-sm">
+          <CardContent className="pt-6">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
                 <Label className="text-base font-normal text-slate-900">
                   Type of Sample <span className="text-destructive ml-0.5">*</span>
                 </Label>
-                <Input 
-                  placeholder="e.g. Proto / Fit / PPS" 
-                  value={typeOfSample} 
-                  onChange={e => setTypeOfSample(e.target.value)}
-                  className="border-0 border-b border-slate-200 rounded-none px-0 focus-visible:ring-0 focus-visible:border-primary transition-all bg-transparent h-10 text-base shadow-none"
-                  required
-                />
+                {editMode && (
+                  <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]">
+                    Editable
+                  </Badge>
+                )}
               </div>
-            </CardContent>
-          </Card>
-        )}
+              <Input 
+                placeholder="e.g. Proto / Fit / PPS" 
+                value={typeOfSample} 
+                onChange={e => setTypeOfSample(e.target.value)}
+                className="border-0 border-b border-slate-200 rounded-none px-0 focus-visible:ring-0 focus-visible:border-primary transition-all bg-transparent h-10 text-base shadow-none"
+                required
+              />
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Style No Card - Read only in Edit Mode */}
         <Card className="shadow-sm">
@@ -1613,8 +1653,21 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         </Card>
 
         {/* Action Buttons */}
-        <div className="flex justify-between items-center pt-8 px-1 overflow-hidden">
-          {!editMode ? (
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pt-8 px-1 overflow-hidden">
+          {editMode ? (
+            <div className="flex items-center gap-2">
+              <input 
+                type="checkbox" 
+                id="notifyModelsUpdate"
+                checked={notifyModelsOnUpdate}
+                onChange={e => setNotifyModelsOnUpdate(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary cursor-pointer"
+              />
+              <Label htmlFor="notifyModelsUpdate" className="text-xs text-slate-600 font-medium cursor-pointer">
+                Send updated email notification to models
+              </Label>
+            </div>
+          ) : (
             showConfirmClear ? (
               <div className="flex items-center gap-2">
                 <Button 
@@ -1658,16 +1711,16 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
                 Clear form
               </Button>
             )
-          ) : <div />}
+          )}
 
-          <Button type="submit" size="lg" className="px-8 h-10 font-medium" disabled={submitting}>
+          <Button type="submit" size="lg" className="px-8 h-10 font-medium w-full sm:w-auto" disabled={submitting}>
             {submitting ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 {editMode ? 'Updating...' : 'Submitting...'}
               </>
             ) : (
-              editMode ? `Submit Round ${currentRound} & Notify Model` : 'Submit'
+              editMode ? `Update Round ${currentRound} & Sync` : 'Submit'
             )}
           </Button>
         </div>

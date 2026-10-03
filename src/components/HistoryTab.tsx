@@ -350,12 +350,13 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                                 Round 5
                               </Button>
                               <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="h-8 w-8 text-slate-400"
+                                variant="outline" 
+                                size="sm" 
+                                className="h-8 text-[11px] border-primary/40 text-primary hover:bg-primary/10 font-bold"
                                 onClick={() => onEdit(sub.id, '1')}
+                                title="Edit Round 1 details, color, size, and photo"
                               >
-                                <ExternalLink className="w-4 h-4" />
+                                Edit R1
                               </Button>
                             </div>
                           </TableCell>
@@ -366,11 +367,19 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                           <TableRow className="bg-slate-50/30 border-b-2 border-indigo-50">
                             <TableCell colSpan={6} className="p-4">
                               <Card className="border shadow-none bg-white overflow-hidden">
-                                <CardHeader className="py-2 px-4 bg-slate-50/50 border-b">
+                                <CardHeader className="py-2.5 px-4 bg-slate-50/50 border-b flex flex-row items-center justify-between">
                                   <CardTitle className="text-[10px] uppercase tracking-wider text-slate-500 font-bold flex items-center gap-2">
                                     <Tag className="w-3 h-3" />
                                     Model Assignment Details (Table Format)
                                   </CardTitle>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-[11px] text-primary border-primary/30 hover:bg-primary/10 font-bold px-2.5 flex items-center gap-1.5 shadow-none"
+                                    onClick={() => onEdit(sub.id, '1')}
+                                  >
+                                    ✏️ Edit Color, Size & Photo
+                                  </Button>
                                 </CardHeader>
                                 <CardContent className="p-0">
                                     <Table className="w-full">

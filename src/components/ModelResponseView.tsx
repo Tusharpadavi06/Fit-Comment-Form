@@ -386,7 +386,9 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
          (submissionData?.id ? localStorage.getItem(`fit_sample_photo_${submissionData.id}`) : null) || '')
       : '';
 
-    return queryPhoto || 
+    // The database is the authoritative source for updated garment photos.
+    // If the database has a photo, ALWAYS prioritize it over URL params so any designer edits immediately reflect!
+    const dbPhoto = 
       submissionData?.sample_photo_url || 
       submissionData?.samplePhotoUrl ||
       submissionData?.sample_photo ||
@@ -398,9 +400,13 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
       assignmentData?.[`round${round}`]?.sample_photo_url || 
       assignmentData?.[`round_${round}`]?.sample_photo_url || 
       assignmentData?.round1?.sample_photo_url || 
-      assignmentData?.round_1?.sample_photo_url || 
-      cachedPhoto ||
-      '';
+      assignmentData?.round_1?.sample_photo_url;
+
+    if (dbPhoto) {
+      return dbPhoto;
+    }
+
+    return queryPhoto || cachedPhoto || '';
   }, [submissionData, assignmentData, round, submissionId]);
 
   // Filter zoomable images from attachments + sample photo
@@ -638,8 +644,8 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
         if (subData) {
           subData.style_number = subData.style_number || subData.styleNo || subData.styleNumber;
           subData.type_of_sample = subData.type_of_sample || subData.sampleType || subData.typeOfSample;
-          subData.series = queryTabName || subData.series || getSeriesFromStyleNumber(subData.style_number || '');
-          subData.sample_photo_url = queryPhoto || subData.sample_photo_url || localStorage.getItem(`fit_sample_photo_${sId}`) || localStorage.getItem(`fit_sample_photo_${subData.style_number}`) || '';
+          subData.series = subData.series || queryTabName || getSeriesFromStyleNumber(subData.style_number || '');
+          subData.sample_photo_url = subData.sample_photo_url || queryPhoto || localStorage.getItem(`fit_sample_photo_${sId}`) || localStorage.getItem(`fit_sample_photo_${subData.style_number}`) || '';
           setSubmissionData((prev: any) => ({ ...prev, ...subData }));
 
           try {
@@ -658,7 +664,7 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
           assData.model_name = assData.model_name || assData.modelName;
           assData.model_email = assData.model_email || assData.modelEmail;
           assData.given_for_fit_date = assData.given_for_fit_date || assData.givenForFitDate || '';
-          assData.series = queryTabName || assData.series || subData?.series || 'General';
+          assData.series = assData.series || queryTabName || subData?.series || 'General';
           setAssignmentData((prev: any) => ({ ...prev, ...assData }));
 
           try {
@@ -698,17 +704,17 @@ export function ModelResponseView({ submissionId, assignmentId, round }: ModelRe
 
     console.log("Analyzing assignment data for pre-fills:", assignmentData.id);
     
-    // 1. Color handled separately per round if round > 1
-    if (assignmentData.color && !color) {
-      setColor(assignmentData.color);
-    }
-    
-    // Support per-round color pre-fill if available
+    // 1. Color handled dynamically: live assignment data takes priority
+    let resolvedColor = assignmentData.color || '';
     const currentRoundKeys = [`round${round}`, `round_${round}`];
     for (const key of currentRoundKeys) {
-      if (assignmentData[key]?.color && !color) {
-        setColor(assignmentData[key].color);
+      if (assignmentData[key]?.color) {
+        resolvedColor = assignmentData[key].color;
+        break;
       }
+    }
+    if (resolvedColor) {
+      setColor(resolvedColor);
     }
     
     // 2. Given for Fit Date (determine correct date per round)
@@ -1675,11 +1681,11 @@ designer02@soie.in`;
             </div>
             <div className="space-y-1">
               <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Size</span>
-              <p className="font-medium text-sm text-slate-900">{assignmentData.size}</p>
+              <p className="font-medium text-sm text-slate-900 font-semibold">{assignmentData.size || '-'}</p>
             </div>
             <div className="space-y-1">
               <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Color</span>
-              <p className="font-medium text-sm text-slate-900">{assignmentData.color}</p>
+              <p className="font-medium text-sm text-slate-900 font-semibold">{color || assignmentData.color || '-'}</p>
             </div>
             <div className="space-y-1">
               <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Sample Given for Fit Date</span>

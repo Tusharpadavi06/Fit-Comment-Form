@@ -667,12 +667,15 @@ function sendMail(data) {
   var givenDate = data.givenForFitDate || data.H || data.P || data.X || data.AF || data.AN || "";
   var samplePhotoUrl = data.samplePhotoUrl || data.sample_photo_url || "";
 
-  var subject = "Action Required: Fit Review for Style " + styleNo + " (Round " + round + ")";
+  var isUpdate = data.type === 'UPDATE_SUBMISSION' || data.isUpdate;
+  var subject = isUpdate
+    ? ("Updated Details: Fit Review for Style " + styleNo + " (Round " + round + ")")
+    : ("Action Required: Fit Review for Style " + styleNo + " (Round " + round + ")");
   
   // HTML Product Specification Block
   var specsHtml = 
     "<div style='background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px; margin: 20px 0;'>" +
-      "<h3 style='margin: 0 0 12px 0; font-size: 15px; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;'>📋 Garment Specification Details</h3>" +
+      "<h3 style='margin: 0 0 12px 0; font-size: 15px; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;'>📋 Garment Specification Details" + (isUpdate ? " <span style=\"color: #f59e0b; font-size: 11px;\">(UPDATED)</span>" : "") + "</h3>" +
       "<table style='width: 100%; font-size: 14px; border-collapse: collapse; line-height: 1.6;'>" +
         "<tr><td style='width: 35%; color: #64748b; padding: 5px 0;'><strong>Style No:</strong></td><td style='color: #0f172a; font-weight: bold; font-size: 15px;'>" + styleNo + "</td></tr>" +
         "<tr><td style='color: #64748b; padding: 5px 0;'><strong>Product Type:</strong></td><td style='color: #0f172a; font-weight: 600;'>" + sampleType + "</td></tr>" +
@@ -699,13 +702,15 @@ function sendMail(data) {
   var htmlBody = 
     "<div style='font-family: Arial, Helvetica, sans-serif; max-width: 620px; margin: auto; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.05);'>" +
       "<div style='background: linear-gradient(135deg, #4338ca 0%, #6366f1 100%); padding: 28px 24px; text-align: center; color: white;'>" +
-        "<h1 style='margin: 0; font-size: 22px; font-weight: bold; letter-spacing: -0.5px;'>Fit Feedback Required</h1>" +
+        "<h1 style='margin: 0; font-size: 22px; font-weight: bold; letter-spacing: -0.5px;'>" + (isUpdate ? "Fit Details Updated" : "Fit Feedback Required") + "</h1>" +
         "<p style='margin: 8px 0 0; font-size: 14px; opacity: 0.95;'>Round " + round + " Sample Assessment • Style " + styleNo + "</p>" +
       "</div>" +
       "<div style='padding: 26px 24px;'>" +
         "<p style='font-size: 15px; color: #1e293b; margin-top: 0;'>Hello <strong>" + modelName + "</strong>,</p>" +
         "<p style='font-size: 14px; color: #475569; line-height: 1.5;'>" +
-          "A new sample garment has been assigned for your fit evaluation. Please inspect the product photo and specifications below, test the garment fit, and submit your feedback." +
+          (isUpdate
+            ? "The specifications (color, size, instructions, or sample photo) for this garment have been updated by the designer. Please review the updated details below and use the same feedback link to submit your evaluation."
+            : "A new sample garment has been assigned for your fit evaluation. Please inspect the product photo and specifications below, test the garment fit, and submit your feedback.") +
         "</p>" +
         photoHtml +
         specsHtml +

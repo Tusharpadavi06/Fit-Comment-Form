@@ -127,7 +127,7 @@ export default function App() {
       <Toaster />
       <div className="w-full h-2.5 bg-primary rounded-t-lg hidden md:block"></div>
       
-      <main className="max-w-2xl mx-auto mt-6 px-4 pb-20">
+      <main className={`mx-auto mt-6 px-4 pb-20 transition-all duration-300 ${activeTab === 'history' ? 'max-w-6xl' : 'max-w-2xl'}`}>
         <div className="mb-6 rounded-xl overflow-hidden bg-white shadow-sm border border-slate-200">
           <a href="https://ibb.co/dsWLS09q" target="_blank" rel="noopener noreferrer" className="block outline-none">
             <img 

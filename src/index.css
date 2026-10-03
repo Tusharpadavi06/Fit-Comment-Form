@@ -153,3 +153,29 @@
     page-break-inside: avoid !important;
   }
 }
+
+/* Custom prominent horizontal scrollbar for frozen column table */
+.custom-horizontal-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #6366f1 #f1f5f9;
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+.custom-horizontal-scrollbar::-webkit-scrollbar {
+  height: 10px;
+  width: 8px;
+}
+.custom-horizontal-scrollbar::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 5px;
+  border: 1px solid #e2e8f0;
+}
+.custom-horizontal-scrollbar::-webkit-scrollbar-thumb {
+  background: #6366f1;
+  border-radius: 5px;
+  border: 2px solid #f1f5f9;
+}
+.custom-horizontal-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #4f46e5;
+}
+

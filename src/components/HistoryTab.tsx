@@ -33,6 +33,237 @@ interface Submission {
   }[];
 }
 
+interface ModelAssignmentDetailsTableProps {
+  sub: Submission;
+  onEdit: (submissionId: string, round: string) => void;
+  onViewRoundPhotos: (assignment: any, round: string) => void;
+  getRoundDate: (assignment: any, round: string) => string;
+  getRoundColor: (assignment: any, round: string) => string;
+  getRoundAttachmentsCount: (assignment: any, round: string) => number;
+}
+
+function ModelAssignmentDetailsTable({
+  sub,
+  onEdit,
+  onViewRoundPhotos,
+  getRoundDate,
+  getRoundColor,
+  getRoundAttachmentsCount
+}: ModelAssignmentDetailsTableProps) {
+  return (
+    <Card className="border shadow-none bg-white overflow-hidden w-full">
+      {/* HEADER */}
+      <CardHeader className="py-2.5 px-4 bg-slate-50/80 border-b flex flex-row items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <CardTitle className="text-xs uppercase tracking-wider text-slate-700 font-bold flex items-center gap-1.5">
+            <Tag className="w-3.5 h-3.5 text-indigo-600" />
+            Model Assignment Details (Table Format)
+          </CardTitle>
+          <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[10px] font-semibold flex items-center gap-1 py-0.5 px-2">
+            <span>📌</span> Model & Email Frozen • ↔️ Scroll for R1-R5
+          </Badge>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-[11px] text-primary border-primary/30 hover:bg-primary/10 font-bold px-2.5 flex items-center gap-1.5 shadow-none"
+          onClick={() => onEdit(sub.id, '1')}
+        >
+          ✏️ Edit Color, Size & Photo
+        </Button>
+      </CardHeader>
+
+      <CardContent className="p-0">
+        {/* Table Container with proper horizontal scrollbar directly under table */}
+        <div className="w-full overflow-x-auto custom-horizontal-scrollbar border-t border-slate-100">
+          <table
+            className="w-full border-separate border-spacing-0 text-left min-w-[1240px]"
+          >
+            <thead className="bg-slate-100 text-slate-700">
+              <tr>
+                {/* FROZEN COLUMN 1: MODEL NAME */}
+                <th className="sticky left-0 z-20 bg-slate-100 text-[10px] font-bold text-slate-800 h-9 border-b border-r border-slate-200 px-3 py-2 w-[130px] min-w-[130px] max-w-[130px] shadow-[2px_0_4px_-1px_rgba(0,0,0,0.06)]">
+                  <span className="flex items-center gap-1">
+                    Model Name <span className="text-[9px] text-indigo-600 font-normal">📌</span>
+                  </span>
+                </th>
+
+                {/* FROZEN COLUMN 2: EMAIL */}
+                <th className="sticky left-[130px] z-20 bg-slate-100 text-[10px] font-bold text-slate-800 h-9 border-b border-r-2 border-indigo-400 px-3 py-2 w-[170px] min-w-[170px] max-w-[170px] shadow-[4px_0_8px_-2px_rgba(79,70,229,0.18)]">
+                  <span className="flex items-center gap-1">
+                    Email <span className="text-[9px] text-indigo-600 font-normal">📌</span>
+                  </span>
+                </th>
+
+                {/* SCROLLABLE HEADERS */}
+                <th className="text-[10px] font-bold h-9 text-center bg-slate-100 border-b border-r border-slate-200 w-[60px] min-w-[60px] px-2">Size</th>
+
+                {/* ROUND 1 */}
+                <th className="text-[10px] font-bold h-9 text-center text-indigo-700 bg-indigo-50 border-b border-r border-slate-200 w-[95px] min-w-[95px] px-2">R1 Date</th>
+                <th className="text-[10px] font-bold h-9 text-center text-indigo-700 bg-indigo-50 border-b border-r border-slate-200 w-[105px] min-w-[105px] px-2">R1 Color</th>
+
+                {/* ROUND 2 */}
+                <th className="text-[10px] font-bold h-9 text-center text-amber-700 bg-amber-50 border-b border-r border-slate-200 w-[95px] min-w-[95px] px-2">R2 Date</th>
+                <th className="text-[10px] font-bold h-9 text-center text-amber-700 bg-amber-50 border-b border-r border-slate-200 w-[105px] min-w-[105px] px-2">R2 Color</th>
+
+                {/* ROUND 3 */}
+                <th className="text-[10px] font-bold h-9 text-center text-emerald-700 bg-emerald-50 border-b border-r border-slate-200 w-[95px] min-w-[95px] px-2">R3 Date</th>
+                <th className="text-[10px] font-bold h-9 text-center text-emerald-700 bg-emerald-50 border-b border-r border-slate-200 w-[105px] min-w-[105px] px-2">R3 Color</th>
+
+                {/* ROUND 4 */}
+                <th className="text-[10px] font-bold h-9 text-center text-purple-700 bg-purple-50 border-b border-r border-slate-200 w-[95px] min-w-[95px] px-2">R4 Date</th>
+                <th className="text-[10px] font-bold h-9 text-center text-purple-700 bg-purple-50 border-b border-r border-slate-200 w-[105px] min-w-[105px] px-2">R4 Color</th>
+
+                {/* ROUND 5 */}
+                <th className="text-[10px] font-bold h-9 text-center text-rose-700 bg-rose-50 border-b border-r border-slate-200 w-[95px] min-w-[95px] px-2">R5 Date</th>
+                <th className="text-[10px] font-bold h-9 text-center text-rose-700 bg-rose-50 border-b border-slate-200 w-[105px] min-w-[105px] px-2">R5 Color</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white">
+              {sub.assignments?.map((a) => (
+                <tr key={a.id} className="hover:bg-slate-50/80 transition-colors h-10 group">
+                  {/* FROZEN COLUMN 1: MODEL NAME */}
+                  <td className="sticky left-0 z-10 bg-white group-hover:bg-slate-50 text-xs py-2 px-3 font-bold text-slate-900 border-b border-r border-slate-200 truncate w-[130px] min-w-[130px] max-w-[130px] shadow-[2px_0_4px_-1px_rgba(0,0,0,0.06)]">
+                    {a.model_name}
+                  </td>
+
+                  {/* FROZEN COLUMN 2: EMAIL */}
+                  <td className="sticky left-[130px] z-10 bg-white group-hover:bg-slate-50 text-[10px] py-2 px-3 text-slate-600 border-b border-r-2 border-indigo-400 truncate w-[170px] min-w-[170px] max-w-[170px] shadow-[4px_0_8px_-2px_rgba(79,70,229,0.18)]" title={a.model_email}>
+                    {a.model_email}
+                  </td>
+
+                  {/* OTHER SCROLLABLE COLUMNS */}
+                  <td className="text-xs py-2 px-2 text-center font-bold text-slate-700 bg-slate-50/30 border-b border-r border-slate-100 whitespace-nowrap">{a.size}</td>
+
+                  {/* ROUND 1 */}
+                  <td className="text-[10px] py-2 px-2 text-center font-mono bg-indigo-50/5 border-b border-r border-slate-100 whitespace-nowrap">{getRoundDate(a, '1')}</td>
+                  <td className="text-[10px] py-2 px-2 text-center bg-indigo-50/5 border-b border-r border-slate-100 truncate max-w-[105px]" title={getRoundColor(a, '1')}>
+                    <span className="inline-flex items-center gap-1 justify-center">
+                      <span>{getRoundColor(a, '1')}</span>
+                      {getRoundAttachmentsCount(a, '1') > 0 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onViewRoundPhotos(a, '1');
+                          }}
+                          title={`Click to zoom ${getRoundAttachmentsCount(a, '1')} photo(s)`}
+                          className="inline-flex items-center text-indigo-700 bg-indigo-100 hover:bg-indigo-200 border border-indigo-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
+                        >
+                          <Camera className="w-2.5 h-2.5 mr-0.5" />
+                          {getRoundAttachmentsCount(a, '1')}
+                        </button>
+                      )}
+                    </span>
+                  </td>
+
+                  {/* ROUND 2 */}
+                  <td className="text-[10px] py-2 px-2 text-center font-mono bg-amber-50/5 border-b border-r border-slate-100 whitespace-nowrap">{getRoundDate(a, '2')}</td>
+                  <td className="text-[10px] py-2 px-2 text-center bg-amber-50/5 border-b border-r border-slate-100 truncate max-w-[105px]" title={getRoundColor(a, '2')}>
+                    <span className="inline-flex items-center gap-1 justify-center">
+                      <span>{getRoundColor(a, '2')}</span>
+                      {getRoundAttachmentsCount(a, '2') > 0 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onViewRoundPhotos(a, '2');
+                          }}
+                          title={`Click to zoom ${getRoundAttachmentsCount(a, '2')} photo(s)`}
+                          className="inline-flex items-center text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
+                        >
+                          <Camera className="w-2.5 h-2.5 mr-0.5" />
+                          {getRoundAttachmentsCount(a, '2')}
+                        </button>
+                      )}
+                    </span>
+                  </td>
+
+                  {/* ROUND 3 */}
+                  <td className="text-[10px] py-2 px-2 text-center font-mono bg-emerald-50/5 border-b border-r border-slate-100 whitespace-nowrap">{getRoundDate(a, '3')}</td>
+                  <td className="text-[10px] py-2 px-2 text-center bg-emerald-50/5 border-b border-r border-slate-100 truncate max-w-[105px]" title={getRoundColor(a, '3')}>
+                    <span className="inline-flex items-center gap-1 justify-center">
+                      <span>{getRoundColor(a, '3')}</span>
+                      {getRoundAttachmentsCount(a, '3') > 0 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onViewRoundPhotos(a, '3');
+                          }}
+                          title={`Click to zoom ${getRoundAttachmentsCount(a, '3')} photo(s)`}
+                          className="inline-flex items-center text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
+                        >
+                          <Camera className="w-2.5 h-2.5 mr-0.5" />
+                          {getRoundAttachmentsCount(a, '3')}
+                        </button>
+                      )}
+                    </span>
+                  </td>
+
+                  {/* ROUND 4 */}
+                  <td className="text-[10px] py-2 px-2 text-center font-mono bg-purple-50/5 border-b border-r border-slate-100 whitespace-nowrap">{getRoundDate(a, '4')}</td>
+                  <td className="text-[10px] py-2 px-2 text-center bg-purple-50/5 border-b border-r border-slate-100 truncate max-w-[105px]" title={getRoundColor(a, '4')}>
+                    <span className="inline-flex items-center gap-1 justify-center">
+                      <span>{getRoundColor(a, '4')}</span>
+                      {getRoundAttachmentsCount(a, '4') > 0 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onViewRoundPhotos(a, '4');
+                          }}
+                          title={`Click to zoom ${getRoundAttachmentsCount(a, '4')} photo(s)`}
+                          className="inline-flex items-center text-purple-800 bg-purple-100 hover:bg-purple-200 border border-purple-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
+                        >
+                          <Camera className="w-2.5 h-2.5 mr-0.5" />
+                          {getRoundAttachmentsCount(a, '4')}
+                        </button>
+                      )}
+                    </span>
+                  </td>
+
+                  {/* ROUND 5 */}
+                  <td className="text-[10px] py-2 px-2 text-center font-mono bg-rose-50/5 border-b border-r border-slate-100 whitespace-nowrap">{getRoundDate(a, '5')}</td>
+                  <td className="text-[10px] py-2 px-2 text-center bg-rose-50/5 border-b border-slate-200 truncate max-w-[105px]" title={getRoundColor(a, '5')}>
+                    <span className="inline-flex items-center gap-1 justify-center">
+                      <span>{getRoundColor(a, '5')}</span>
+                      {getRoundAttachmentsCount(a, '5') > 0 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onViewRoundPhotos(a, '5');
+                          }}
+                          title={`Click to zoom ${getRoundAttachmentsCount(a, '5')} photo(s)`}
+                          className="inline-flex items-center text-rose-800 bg-rose-100 hover:bg-rose-200 border border-rose-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
+                        >
+                          <Camera className="w-2.5 h-2.5 mr-0.5" />
+                          {getRoundAttachmentsCount(a, '5')}
+                        </button>
+                      )}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Table footer with simple, clean guidance */}
+        <div className="py-2.5 px-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+          <div className="flex items-center gap-1.5 font-medium">
+            <span className="text-indigo-600 font-bold">📌 Frozen Columns:</span> Model Name & Email stay pinned when scrolling horizontally.
+          </div>
+          <div className="flex items-center gap-1 text-slate-500 font-medium">
+            <span>↔️ Drag horizontal scrollbar above to view Size to Round 5</span>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 interface HistoryTabProps {
   onEdit: (submissionId: string, round: string) => void;
 }
@@ -43,6 +274,19 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Scroll helper function for expanded table
+  const scrollTable = (subId: string, target: 'left' | 'right' | number) => {
+    const el = document.getElementById(`scroll-container-${subId}`);
+    if (!el) return;
+    if (typeof target === 'number') {
+      el.scrollTo({ left: target, behavior: 'smooth' });
+    } else if (target === 'left') {
+      el.scrollBy({ left: -280, behavior: 'smooth' });
+    } else {
+      el.scrollBy({ left: 280, behavior: 'smooth' });
+    }
+  };
 
   const getRoundDate = (assignment: any, round: string) => {
     const rData = assignment[`round${round}`];
@@ -261,16 +505,16 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
               <p className="text-slate-400 italic">No submissions found</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
+            <div className="overflow-x-auto w-full">
+              <Table className="w-full table-fixed min-w-[780px]">
                 <TableHeader className="bg-slate-50">
                   <TableRow>
-                    <TableHead className="font-bold py-4">Style No</TableHead>
-                    <TableHead className="font-bold">Models</TableHead>
+                    <TableHead className="font-bold py-4 w-[160px]">Style No</TableHead>
+                    <TableHead className="font-bold w-[180px]">Models</TableHead>
                     <TableHead className="font-bold">Details</TableHead>
-                    <TableHead className="font-bold">Created</TableHead>
-                    <TableHead className="font-bold">Series</TableHead>
-                    <TableHead className="text-right font-bold pr-6">Manage</TableHead>
+                    <TableHead className="font-bold w-[110px]">Created</TableHead>
+                    <TableHead className="font-bold w-[100px]">Series</TableHead>
+                    <TableHead className="text-right font-bold pr-6 w-[280px]">Manage</TableHead>
                   </TableRow>
                 </TableHeader>
                   <TableBody>
@@ -365,163 +609,17 @@ export function HistoryTab({ onEdit }: HistoryTabProps) {
                         {/* EXPANDABLE DETAILS BOX */}
                         {expandedId === sub.id && (
                           <TableRow className="bg-slate-50/30 border-b-2 border-indigo-50">
-                            <TableCell colSpan={6} className="p-4">
-                              <Card className="border shadow-none bg-white overflow-hidden">
-                                <CardHeader className="py-2.5 px-4 bg-slate-50/50 border-b flex flex-row items-center justify-between">
-                                  <CardTitle className="text-[10px] uppercase tracking-wider text-slate-500 font-bold flex items-center gap-2">
-                                    <Tag className="w-3 h-3" />
-                                    Model Assignment Details (Table Format)
-                                  </CardTitle>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 text-[11px] text-primary border-primary/30 hover:bg-primary/10 font-bold px-2.5 flex items-center gap-1.5 shadow-none"
-                                    onClick={() => onEdit(sub.id, '1')}
-                                  >
-                                    ✏️ Edit Color, Size & Photo
-                                  </Button>
-                                </CardHeader>
-                                <CardContent className="p-0">
-                                    <Table className="w-full">
-                                      <TableHeader className="bg-slate-50">
-                                        <TableRow className="hover:bg-transparent border-b">
-                                          <TableHead className="text-[10px] font-bold h-8 border-r min-w-[120px]">Model Name</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 border-r min-w-[100px]">Email</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center bg-slate-100/50 border-r min-w-[60px]">Size</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-indigo-700 bg-indigo-50/50 border-r min-w-[90px]">R1 Date</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-indigo-700 bg-indigo-50/50 border-r min-w-[80px]">R1 Color</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-amber-700 bg-amber-50/50 border-r min-w-[90px]">R2 Date</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-amber-700 bg-amber-50/50 border-r min-w-[80px]">R2 Color</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-emerald-700 bg-emerald-50/50 border-r min-w-[90px]">R3 Date</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-emerald-700 bg-emerald-50/50 border-r min-w-[80px]">R3 Color</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-purple-700 bg-purple-50/50 border-r min-w-[90px]">R4 Date</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-purple-700 bg-purple-50/50 border-r min-w-[80px]">R4 Color</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-rose-700 bg-rose-50/50 border-r min-w-[90px]">R5 Date</TableHead>
-                                          <TableHead className="text-[10px] font-bold h-8 text-center text-rose-700 bg-rose-50/50 min-w-[80px]">R5 Color</TableHead>
-                                        </TableRow>
-                                      </TableHeader>
-                                      <TableBody>
-                                        {sub.assignments?.map((a) => (
-                                          <TableRow key={a.id} className="hover:bg-slate-50/50 h-10 border-b last:border-0">
-                                            <TableCell className="text-xs py-1.5 font-bold text-slate-900 border-r truncate max-w-[120px]">{a.model_name}</TableCell>
-                                            <TableCell className="text-[9px] py-1.5 text-slate-400 border-r truncate max-w-[100px]" title={a.model_email}>{a.model_email}</TableCell>
-                                            <TableCell className="text-xs py-1.5 text-center font-bold text-slate-700 bg-slate-50/20 border-r">{a.size}</TableCell>
-                                            
-                                            {/* ROUND 1 */}
-                                            <TableCell className="text-[10px] py-1.5 text-center font-mono bg-indigo-50/5 border-r whitespace-nowrap">{getRoundDate(a, '1')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-indigo-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '1')}>
-                                              <span className="inline-flex items-center gap-1 justify-center">
-                                                <span>{getRoundColor(a, '1')}</span>
-                                                {getRoundAttachmentsCount(a, '1') > 0 && (
-                                                  <button 
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      handleViewRoundPhotos(a, '1');
-                                                    }}
-                                                    title={`Click to zoom ${getRoundAttachmentsCount(a, '1')} photo(s)`} 
-                                                    className="inline-flex items-center text-indigo-700 bg-indigo-100 hover:bg-indigo-200 border border-indigo-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
-                                                  >
-                                                    <Camera className="w-2.5 h-2.5 mr-0.5" />
-                                                    {getRoundAttachmentsCount(a, '1')}
-                                                  </button>
-                                                )}
-                                              </span>
-                                            </TableCell>
-                                            
-                                            {/* ROUND 2 */}
-                                            <TableCell className="text-[10px] py-1.5 text-center font-mono bg-amber-50/5 border-r whitespace-nowrap">{getRoundDate(a, '2')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-amber-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '2')}>
-                                              <span className="inline-flex items-center gap-1 justify-center">
-                                                <span>{getRoundColor(a, '2')}</span>
-                                                {getRoundAttachmentsCount(a, '2') > 0 && (
-                                                  <button 
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      handleViewRoundPhotos(a, '2');
-                                                    }}
-                                                    title={`Click to zoom ${getRoundAttachmentsCount(a, '2')} photo(s)`} 
-                                                    className="inline-flex items-center text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
-                                                  >
-                                                    <Camera className="w-2.5 h-2.5 mr-0.5" />
-                                                    {getRoundAttachmentsCount(a, '2')}
-                                                  </button>
-                                                )}
-                                              </span>
-                                            </TableCell>
-                                            
-                                            {/* ROUND 3 */}
-                                            <TableCell className="text-[10px] py-1.5 text-center font-mono bg-emerald-50/5 border-r whitespace-nowrap">{getRoundDate(a, '3')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-emerald-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '3')}>
-                                              <span className="inline-flex items-center gap-1 justify-center">
-                                                <span>{getRoundColor(a, '3')}</span>
-                                                {getRoundAttachmentsCount(a, '3') > 0 && (
-                                                  <button 
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      handleViewRoundPhotos(a, '3');
-                                                    }}
-                                                    title={`Click to zoom ${getRoundAttachmentsCount(a, '3')} photo(s)`} 
-                                                    className="inline-flex items-center text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
-                                                  >
-                                                    <Camera className="w-2.5 h-2.5 mr-0.5" />
-                                                    {getRoundAttachmentsCount(a, '3')}
-                                                  </button>
-                                                )}
-                                              </span>
-                                            </TableCell>
-
-                                            {/* ROUND 4 */}
-                                            <TableCell className="text-[10px] py-1.5 text-center font-mono bg-purple-50/5 border-r whitespace-nowrap">{getRoundDate(a, '4')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-purple-50/5 border-r truncate max-w-[80px]" title={getRoundColor(a, '4')}>
-                                              <span className="inline-flex items-center gap-1 justify-center">
-                                                <span>{getRoundColor(a, '4')}</span>
-                                                {getRoundAttachmentsCount(a, '4') > 0 && (
-                                                  <button 
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      handleViewRoundPhotos(a, '4');
-                                                    }}
-                                                    title={`Click to zoom ${getRoundAttachmentsCount(a, '4')} photo(s)`} 
-                                                    className="inline-flex items-center text-purple-800 bg-purple-100 hover:bg-purple-200 border border-purple-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
-                                                  >
-                                                    <Camera className="w-2.5 h-2.5 mr-0.5" />
-                                                    {getRoundAttachmentsCount(a, '4')}
-                                                  </button>
-                                                )}
-                                              </span>
-                                            </TableCell>
-
-                                            {/* ROUND 5 */}
-                                            <TableCell className="text-[10px] py-1.5 text-center font-mono bg-rose-50/5 border-r whitespace-nowrap">{getRoundDate(a, '5')}</TableCell>
-                                            <TableCell className="text-[10px] py-1.5 text-center bg-rose-50/5 truncate max-w-[80px]" title={getRoundColor(a, '5')}>
-                                              <span className="inline-flex items-center gap-1 justify-center">
-                                                <span>{getRoundColor(a, '5')}</span>
-                                                {getRoundAttachmentsCount(a, '5') > 0 && (
-                                                  <button 
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      handleViewRoundPhotos(a, '5');
-                                                    }}
-                                                    title={`Click to zoom ${getRoundAttachmentsCount(a, '5')} photo(s)`} 
-                                                    className="inline-flex items-center text-rose-800 bg-rose-100 hover:bg-rose-200 border border-rose-200 rounded px-1 py-0.2 text-[8px] font-bold cursor-pointer transition-colors"
-                                                  >
-                                                    <Camera className="w-2.5 h-2.5 mr-0.5" />
-                                                    {getRoundAttachmentsCount(a, '5')}
-                                                  </button>
-                                                )}
-                                              </span>
-                                            </TableCell>
-                                          </TableRow>
-                                        ))}
-                                      </TableBody>
-                                    </Table>
-                                </CardContent>
-                              </Card>
+                            <TableCell colSpan={6} className="p-3 w-full max-w-0">
+                              <div className="w-full max-w-full overflow-hidden">
+                                <ModelAssignmentDetailsTable
+                                  sub={sub}
+                                  onEdit={onEdit}
+                                  onViewRoundPhotos={handleViewRoundPhotos}
+                                  getRoundDate={getRoundDate}
+                                  getRoundColor={getRoundColor}
+                                  getRoundAttachmentsCount={getRoundAttachmentsCount}
+                                />
+                              </div>
                             </TableCell>
                           </TableRow>
                         )}

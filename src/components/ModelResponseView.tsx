@@ -1352,7 +1352,7 @@ Comments on fabric / trims: ${fabricTrims || 'No remarks noted'}
 
 Warm regards,
 Deepika
-Lead Designer & Quality Audit Team
+Sr.Designer
 SOIE • Ginza Industries Limited
 designer02@soie.in`;
 

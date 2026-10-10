@@ -471,11 +471,20 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
       return;
     }
 
-    const validAssignments = assignments.filter(a => a.modelId && a.color && a.size);
-    if (validAssignments.length === 0) {
-      toast.error('Please add at least one valid model assignment');
+    const selectedAssignments = assignments.filter(a => a.modelId);
+    if (selectedAssignments.length === 0) {
+      toast.error('Please select at least one model');
       return;
     }
+
+    const missingFields = selectedAssignments.filter(a => !a.color?.trim() || !a.size?.trim());
+    if (missingFields.length > 0) {
+      const names = missingFields.map(a => a.modelName || 'Model').join(', ');
+      toast.error(`Please provide Color and Size for: ${names}. Use "Apply to All" in Default Details to fill them quickly.`);
+      return;
+    }
+
+    const validAssignments = selectedAssignments;
 
     setSubmitting(true);
     
@@ -772,11 +781,15 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
         await supabase.from('assignments').delete().in('id', deletedAssignmentIds);
       }
 
-      // 3. Google Sheets Sync
+      // 3. Google Sheets Sync (Sequential with delay to prevent Google Apps Script lock timeouts)
       const targetSampleCol = SAMPLE_PHOTO_COLUMNS[currentRound] || "BI";
-      console.log(`Syncing ${assignmentsWithLinks.length} items to Google Sheets Tab: "${targetTabName}", Sample Col: "${targetSampleCol}"...`);
+      console.log(`Syncing ${assignmentsWithLinks.length} items to Google Sheets Tab: "${targetTabName}", Sample Col: "${targetSampleCol}" sequentially...`);
       
-      const results = await Promise.all(assignmentsWithLinks.map(async (a) => {
+      const results: { assignmentId: string; modelName: string; email: string; success: boolean; error?: string }[] = [];
+      const totalToSync = assignmentsWithLinks.length;
+
+      for (let i = 0; i < totalToSync; i++) {
+        const a = assignmentsWithLinks[i];
         const currentLink = currentRound === '2' ? a.r2Link : (currentRound === '3' ? a.r3Link : (currentRound === '4' ? a.r4Link : (currentRound === '5' ? a.r5Link : a.r1Link)));
         
         const payload = {
@@ -828,10 +841,47 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
           } : null,
           [targetSampleCol]: samplePhoto ? (samplePhoto.name || 'Sample Photo Attached') : ''
         };
-        return saveToGoogleSheets(payload);
-      }));
 
-      const allSuccess = results.every(r => r.success);
+        const res = await saveToGoogleSheets(payload);
+        results.push({
+          assignmentId: a.id,
+          modelName: a.modelName,
+          email: a.modelEmail,
+          success: res.success,
+          error: res.error
+        });
+
+        // Record sync status in localStorage and Supabase
+        if (res.success) {
+          try {
+            const syncMap = JSON.parse(localStorage.getItem('fit_synced_assignments_map') || '{}');
+            syncMap[a.id] = true;
+            localStorage.setItem('fit_synced_assignments_map', JSON.stringify(syncMap));
+          } catch (e) {}
+
+          const syncUpdate = {
+            sheet_synced: true,
+            email_sent: editMode ? notifyModelsOnUpdate : true,
+            synced_at: new Date().toISOString()
+          };
+          try {
+            await supabase.from('assignments').update({
+              [`round${currentRound}`]: {
+                ...(a[`round${currentRound}Data`] || {}),
+                ...syncUpdate
+              }
+            }).eq('id', a.id);
+          } catch (e) {}
+        }
+
+        // 600ms delay between calls to let Google Apps Script release the lock cleanly
+        if (i < totalToSync - 1) {
+          await new Promise(r => setTimeout(r, 600));
+        }
+      }
+
+      const successCount = results.filter(r => r.success).length;
+      const allSuccess = successCount === totalToSync;
 
       setLastSubmission({
         id: submissionId,
@@ -857,11 +907,13 @@ export function FormTab({ modelPool, loadingModels, refreshModels }: FormTabProp
 
       if (!allSuccess) {
         return editMode 
-          ? `Round ${currentRound} Updated (But Google Sheets failed to sync - check settings)` 
-          : "Form Submitted successfully! (But Google Sheets failed to sync - check settings)";
+          ? `Round ${currentRound}: ${successCount}/${totalToSync} models synced to Google Sheet. Check History Tab to resync remaining models.` 
+          : `Form Submitted: ${successCount}/${totalToSync} models synced to Google Sheet. Check History Tab to resync remaining models.`;
       }
       
-      return editMode ? `Round ${currentRound} Updated!` : "Form Submitted successfully!";
+      return editMode 
+        ? `Round ${currentRound} Updated! All ${totalToSync} models synced to Google Sheet & notified.` 
+        : `Form Submitted! All ${totalToSync} models saved to Google Sheet & notified by email.`;
     })();
 
     toast.promise(submissionPromise, {
